@@ -67,7 +67,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 ## Key engineering decisions
 
 - [ADR-0001 — Stack & scope](docs/adr/0001-stack-and-scope.md)
-- ADR-0002 — Tenant isolation strategy *(M1)*
+- [ADR-0002 — Tenant isolation strategy](docs/adr/0002-tenant-isolation.md)
 - ADR-0003 — Chunking strategy *(M2)*
 
 ## License
