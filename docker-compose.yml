@@ -10,5 +10,14 @@ services:
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+  # Dev-only identity provider. Start with: docker compose --profile dev up keycloak
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["dev"]
+    command: ["start-dev"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    ports: ["8080:8080"]
 volumes:
   pgdata:

@@ -11,6 +11,22 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: tenantiq
+          POSTGRES_PASSWORD: tenantiq
+          POSTGRES_DB: tenantiq
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tenantiq"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://tenantiq:tenantiq@localhost:5432/tenantiq
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,6 +38,8 @@ jobs:
         run: |
           ruff check .
           black --check .
+      - name: Migrations are up to date
+        run: python manage.py makemigrations --check --dry-run
       - name: Test
         run: pytest -q
 
