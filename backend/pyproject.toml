@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "tenantiq-backend"
 version = "0.1.0"
@@ -11,10 +15,12 @@ dependencies = [
     "pgvector>=0.3",
     "psycopg[binary]>=3.1",
     "anthropic>=0.40",
+    "pyjwt[crypto]>=2.8",
+    "dj-database-url>=2.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6", "black>=24.0"]
+dev = ["pytest>=8.0", "pytest-django>=4.8", "ruff>=0.6", "black>=24.0"]
 
 [tool.ruff]
 line-length = 100
@@ -22,5 +28,10 @@ line-length = 100
 [tool.black]
 line-length = 100
 
+[tool.setuptools.packages.find]
+include = ["app*", "config*"]
+namespaces = false
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
+DJANGO_SETTINGS_MODULE = "config.settings"
