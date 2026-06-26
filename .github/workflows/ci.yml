@@ -26,7 +26,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgres://tenantiq:tenantiq@localhost:5432/tenantiq
+      # Connect as the non-superuser role so RLS is genuinely exercised in CI (ADR-0002); the
+      # role is created by the "Create non-superuser app role" step below.
+      DATABASE_URL: postgres://tenantiq_app:tenantiq_app@localhost:5432/tenantiq
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,6 +40,16 @@ jobs:
         run: |
           ruff check .
           black --check .
+      - name: Create non-superuser app role (RLS enforces only for non-superusers; ADR-0002)
+        # Mirrors infra/postgres/init/10-app-role.sql, which docker-compose runs on first DB init.
+        run: |
+          python - <<'PY'
+          import psycopg
+          with psycopg.connect("postgres://tenantiq:tenantiq@localhost:5432/tenantiq", autocommit=True) as conn:
+              conn.execute("CREATE ROLE tenantiq_app LOGIN PASSWORD 'tenantiq_app' NOSUPERUSER NOBYPASSRLS CREATEDB")
+              conn.execute("GRANT ALL ON DATABASE tenantiq TO tenantiq_app")
+              conn.execute("ALTER SCHEMA public OWNER TO tenantiq_app")
+          PY
       - name: Migrations are up to date
         run: python manage.py makemigrations --check --dry-run
       - name: Test
