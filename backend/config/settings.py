@@ -34,6 +34,8 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.middleware.common.CommonMiddleware",
+    # Clears the per-request tenant contextvar after the response (ADR-0002, #8).
+    "app.middleware.TenantContextMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -58,6 +60,10 @@ DATABASES = {
         conn_max_age=600,
     )
 }
+# Wrap each request in a transaction so the RLS session variable (set via SET LOCAL in the auth
+# seam) is scoped to that request and self-resets at commit/rollback — safe across pooled
+# connections (ADR-0002, #8).
+DATABASES["default"]["ATOMIC_REQUESTS"] = True
 
 AUTH_USER_MODEL = "app.User"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

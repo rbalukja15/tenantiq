@@ -12,6 +12,8 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+from app.tenant_context import NoActiveTenant, get_current_tenant_id
+
 
 class User(AbstractUser):
     """Custom user so we can key identity on the OIDC subject + issuer.
@@ -65,3 +67,69 @@ class TenantMembership(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} @ {self.tenant.slug}"
+
+
+class TenantScopedManager(models.Manager):
+    """Default manager for tenant-owned models (Layer 1, ADR-0002).
+
+    Filters every queryset to the active tenant, and *raises* :class:`NoActiveTenant` when none is
+    set — so "forgot to scope" is a loud error, never a silent all-tenant read. System paths that
+    legitimately span tenants use the explicit ``all_objects`` manager instead.
+    """
+
+    def get_queryset(self):
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            raise NoActiveTenant(
+                f"{self.model.__name__} accessed with no active tenant. Use tenant_context()/"
+                "activate_tenant(), or the explicit all_objects manager for system access."
+            )
+        return super().get_queryset().filter(tenant_id=tenant_id)
+
+
+class TenantOwnedModel(models.Model):
+    """Abstract base for every tenant-owned table: a non-null ``tenant`` FK, the tenant-scoped
+    default manager, and (on Postgres) row-level security added per table in the 0003 migration.
+
+    ``base_manager_name`` points Django internals and reverse FK lookups at the unfiltered
+    ``all_objects`` so they never trip the raising default manager.
+    """
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="%(class)ss",
+        db_index=True,
+        editable=False,
+    )
+
+    objects = TenantScopedManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        abstract = True
+        base_manager_name = "all_objects"
+
+    def save(self, *args, **kwargs):
+        current = get_current_tenant_id()
+        if self.tenant_id is None:
+            if current is None:
+                raise NoActiveTenant(f"Cannot save {type(self).__name__} with no active tenant.")
+            self.tenant_id = current
+        elif current is not None and self.tenant_id != current:
+            raise NoActiveTenant(
+                f"Refusing to save {type(self).__name__} for tenant {self.tenant_id} while the "
+                f"active tenant is {current}."
+            )
+        super().save(*args, **kwargs)
+
+
+class Document(TenantOwnedModel):
+    """A tenant's document — the minimal isolation surface for #8. Ingestion fields (file, status,
+    chunks, embeddings) arrive in M2."""
+
+    title = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return self.title

@@ -19,6 +19,16 @@ TEST_ISSUER = "https://keycloak.test/realms/acme"
 TEST_CLIENT_ID = "tenantiq-acme"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_tenant_context():
+    """Keep the current-tenant contextvar from leaking across tests (it is process-global)."""
+    from app.tenant_context import clear_current_tenant
+
+    clear_current_tenant()
+    yield
+    clear_current_tenant()
+
+
 @pytest.fixture(scope="session")
 def rsa_keys() -> tuple[bytes, bytes]:
     """(private_pem, public_pem) for RS256 signing/verification in tests."""
