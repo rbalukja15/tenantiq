@@ -30,3 +30,14 @@ added a `tenantiq_app` (`NOSUPERUSER NOBYPASSRLS`) that owns the schema, in comp
 real Postgres caught a real bug — once the GUC has been set on a pooled connection it reads back as
 `''` (not NULL), and `''::uuid` raised instead of matching nothing; fixed with `NULLIF(…, '')`.
 Cross-layer adversarial proofs (isolation holds with the ORM filter deleted) come next in #9.
+
+## 2026-06-27 — M1 #9: cross-tenant isolation proof — M1 complete
+Added `tests/test_tenant_isolation.py`: an adversarial suite that seeds two tenants and asserts A can
+never reach B — at the API edge (both directions, and with a forged `?tenant_id` that's correctly
+ignored because the tenant comes from the verified `iss`), through the ORM (can't even fetch B's row
+by id), and — the headline — with the application filter deliberately bypassed, where Postgres RLS
+alone still hides B's rows from the unscoped manager and from raw SQL. To prove the suite isn't
+vacuously green I removed the manager's filter and watched four tests go red, then restored it. This
+closes M1: every tenant data path is scoped, and the guarantee is now enforced in two layers *and*
+proven in CI. Next: M2 — document ingestion (upload → chunk → embed in pgvector), where Celery tasks
+will set the tenant explicitly since they have no request.
