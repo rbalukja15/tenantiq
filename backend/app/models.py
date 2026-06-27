@@ -124,11 +124,29 @@ class TenantOwnedModel(models.Model):
         super().save(*args, **kwargs)
 
 
+def tenant_document_path(instance: "Document", filename: str) -> str:
+    """Store uploads under a per-tenant, non-guessable path so files are isolated on disk too."""
+    return f"tenants/{instance.tenant_id}/documents/{uuid.uuid4()}/{filename}"
+
+
 class Document(TenantOwnedModel):
-    """A tenant's document — the minimal isolation surface for #8. Ingestion fields (file, status,
-    chunks, embeddings) arrive in M2."""
+    """A tenant's uploaded document and its ingestion status. The raw file lives on the configured
+    storage under a tenant-scoped path; metadata (and, in M2, chunks + embeddings) live in
+    Postgres. Status advances PENDING -> PROCESSING -> READY/FAILED as the pipeline runs (#11/#12).
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        READY = "ready", "Ready"
+        FAILED = "failed", "Failed"
 
     title = models.CharField(max_length=255)
+    file = models.FileField(upload_to=tenant_document_path, max_length=500, blank=True, default="")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    content_type = models.CharField(max_length=100, blank=True, default="")
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    original_filename = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:

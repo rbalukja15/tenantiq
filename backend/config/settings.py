@@ -90,3 +90,12 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+
+# Uploaded files. Local filesystem now (behind Django's storage API); swap to object storage
+# (django-storages) in M6 by config only. Files land under a per-tenant path
+# (app.models.tenant_document_path) and are never served publicly.
+MEDIA_ROOT = os.environ.get("MEDIA_ROOT", str(BASE_DIR / "media"))
+MEDIA_URL = "/media/"
+
+# Upload guardrails enforced by app.serializers.DocumentSerializer (deep validation is #11).
+TENANTIQ_MAX_UPLOAD_BYTES = int(os.environ.get("TENANTIQ_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
