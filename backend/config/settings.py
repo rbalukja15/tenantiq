@@ -8,6 +8,7 @@ token-verifier factory, which makes verification injectable for hermetic tests (
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import dj_database_url
@@ -97,5 +98,16 @@ STATIC_URL = "static/"
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", str(BASE_DIR / "media"))
 MEDIA_URL = "/media/"
 
-# Upload guardrails enforced by app.serializers.DocumentSerializer (deep validation is #11).
+# Upload guardrails enforced by app.serializers.DocumentSerializer.
 TENANTIQ_MAX_UPLOAD_BYTES = int(os.environ.get("TENANTIQ_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+
+# Celery / async ingestion (M2). Broker + result backend are Redis; CI/tests run tasks eagerly.
+CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+# Run tasks inline by default under pytest, so the suite (and CI) needs no live broker.
+CELERY_TASK_ALWAYS_EAGER = _env_bool("CELERY_TASK_ALWAYS_EAGER", "pytest" in sys.modules)
+CELERY_TASK_EAGER_PROPAGATES = True
+
+# Chunking strategy (ADR-0003). Tunable; sized by a chars-per-token estimate until #12's tokenizer.
+TENANTIQ_CHUNK_TARGET_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_TARGET_TOKENS", "800"))
+TENANTIQ_CHUNK_OVERLAP_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_OVERLAP_TOKENS", "100"))

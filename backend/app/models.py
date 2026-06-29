@@ -151,3 +151,27 @@ class Document(TenantOwnedModel):
 
     def __str__(self) -> str:
         return self.title
+
+
+class Chunk(TenantOwnedModel):
+    """A contiguous piece of a document's extracted text — the unit that gets embedded (#12) and
+    retrieved (M3). Tenant-owned, so it inherits both isolation layers."""
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="chunks")
+    index = models.PositiveIntegerField()
+    text = models.TextField()
+    char_count = models.PositiveIntegerField(default=0)
+    token_estimate = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta(TenantOwnedModel.Meta):
+        abstract = False
+        ordering = ["document", "index"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "index"], name="unique_document_chunk_index"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.document_id}#{self.index}"

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from django.db import Error, connection, transaction
 
-from app.models import Document, Tenant
+from app.models import Chunk, Document, Tenant
 from app.tenant_context import GUC, tenant_context
 
 pytestmark = pytest.mark.django_db
@@ -56,6 +56,23 @@ def test_rls_returns_no_rows_when_no_tenant_is_set():
         cur.execute("RESET app.current_tenant")  # simulate a request with no tenant resolved
         cur.execute("SELECT count(*) FROM app_document")
         assert cur.fetchone()[0] == 0
+
+
+@requires_postgres
+def test_rls_filters_chunks_to_the_active_tenant():
+    # The new tenant-owned app_chunk table (0006) must get the same DB backstop as documents.
+    a, b = make_tenant("acme"), make_tenant("globex")
+    with tenant_context(a):
+        doc = Document.objects.create(title="d")
+        Chunk.objects.create(document=doc, index=0, text="acme-chunk", char_count=10)
+    with tenant_context(a):
+        with connection.cursor() as cur:
+            cur.execute("SELECT text FROM app_chunk")
+            assert [row[0] for row in cur.fetchall()] == ["acme-chunk"]
+    with tenant_context(b):
+        with connection.cursor() as cur:
+            cur.execute("SELECT text FROM app_chunk")
+            assert cur.fetchall() == []
 
 
 @requires_postgres

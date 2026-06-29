@@ -53,3 +53,18 @@ caller's tenant and the list can only return their rows — so the isolation pro
 write path for free (a cross-tenant upload test confirms B never sees A's file). Files are stored but
 never served publicly; a scoped download endpoint can come later. The row waits at `PENDING` for
 #11's parsing/chunking pipeline.
+
+## 2026-06-27 — M2 #11: parsing & chunking pipeline (Celery) + ADR-0003
+Wrote **ADR-0003** (recursive, structure-aware chunking; ~800-token chunks with ~100 overlap;
+hand-rolled splitter + `pypdf`, no LangChain) then built it: `app/parsing.py` (extract text, turning
+any bad/attacker-supplied file into a `ParseError`), `app/chunking.py` (a pure recursive splitter
+that prefers paragraph→sentence→word→hard-cut boundaries and carries overlap forward), and
+`app/ingestion.py` tying them together. A Celery task runs it off the request path; per ADR-0002 it
+takes the tenant id explicitly (no request) and writes tenant-owned `Chunk` rows (new `app_chunk`
+RLS migration, mirroring `0003`). The upload view enqueues the task in `transaction.on_commit` so the
+worker can't race the request transaction. Two gotchas worth noting: bulk_create skips `save()`, so
+the tenant is set explicitly on each chunk to satisfy the RLS `WITH CHECK`; and getting Celery to run
+inline in tests took making `task_always_eager` default on under pytest (mutating `conf` after the
+app reads it from Django settings doesn't stick) plus `ignore_result=True` so no result backend is
+touched. Logic is split from plumbing — `run_ingestion` is a plain, synchronously-tested function;
+the task is a thin wrapper with retry/backoff. Next: #12 — embeddings into pgvector.

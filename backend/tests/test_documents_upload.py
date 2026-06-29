@@ -152,3 +152,18 @@ def test_uploaded_document_is_tenant_scoped(api, tenant_a, tenant_b, mint_token)
     assert [d["title"] for d in a_list.json()] == ["acme.txt"]
     b_list = api.get("/api/documents", **bearer(b_token(mint_token)))
     assert b_list.json() == []
+
+
+def test_upload_triggers_ingestion(api, tenant_a, mint_token, django_capture_on_commit_callbacks):
+    with django_capture_on_commit_callbacks(execute=True):
+        resp = api.post(
+            "/api/documents",
+            {"file": txt(body=b"Some words here, plenty for at least one chunk of text.")},
+            format="multipart",
+            **bearer(a_token(mint_token)),
+        )
+    assert resp.status_code == 201, resp.content
+    with tenant_context(tenant_a):
+        doc = Document.objects.get(id=resp.json()["id"])
+        assert doc.status == "ready"
+        assert doc.chunks.count() >= 1
