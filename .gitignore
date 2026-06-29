@@ -8,6 +8,9 @@ venv/
 .ruff_cache/
 *.sqlite3
 
+# Uploaded media (local dev storage)
+backend/media/
+
 # Node
 node_modules/
 .next/

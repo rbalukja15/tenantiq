@@ -41,3 +41,15 @@ vacuously green I removed the manager's filter and watched four tests go red, th
 closes M1: every tenant data path is scoped, and the guarantee is now enforced in two layers *and*
 proven in CI. Next: M2 — document ingestion (upload → chunk → embed in pgvector), where Celery tasks
 will set the tenant explicitly since they have no request.
+
+## 2026-06-27 — M2 #10: document upload + storage
+Opened M2 by turning `Document` from #8's placeholder into a real uploaded file: a multipart
+`POST /api/documents` validates type (PDF/text/Markdown) + size, stores the raw bytes, and persists
+a `PENDING` row. Storage is the local filesystem behind Django's `FileField` (so M6 can swap to S3
+by config) under a per-tenant, non-guessable path `tenants/<tenant_id>/documents/<uuid>/…` — files
+are isolated on disk, not just in the DB. The endpoint became a DRF `ListCreateAPIView` +
+`DocumentSerializer`; because `Document.objects` is already tenant-scoped, the upload is bound to the
+caller's tenant and the list can only return their rows — so the isolation proof extends to the new
+write path for free (a cross-tenant upload test confirms B never sees A's file). Files are stored but
+never served publicly; a scoped download endpoint can come later. The row waits at `PENDING` for
+#11's parsing/chunking pipeline.

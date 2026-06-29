@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from app.models import Document
+from app.serializers import DocumentSerializer
 
 
 class MeView(APIView):
@@ -29,12 +31,16 @@ class MeView(APIView):
         )
 
 
-class DocumentListView(APIView):
-    """List the caller's documents. ``Document.objects`` is tenant-scoped, so this is the same
-    query for every tenant yet can only ever return the caller's own rows (ADR-0002, #8)."""
+class DocumentListCreateView(generics.ListCreateAPIView):
+    """List the caller's documents, or upload a new one. ``Document.objects`` is tenant-scoped, so
+    the list can only ever return the caller's rows, and an upload is bound to the caller's tenant
+    (ADR-0002, #8). The raw file is validated and stored; the row starts at PENDING (#10)."""
 
     permission_classes = [IsAuthenticated]
+    serializer_class = DocumentSerializer
 
-    def get(self, request: Request) -> Response:
-        documents = Document.objects.order_by("created_at").values("id", "title", "created_at")
-        return Response(list(documents))
+    def get_queryset(self):
+        return Document.objects.order_by("created_at")
+
+    def perform_create(self, serializer: DocumentSerializer) -> None:
+        serializer.save(tenant=self.request.tenant)
