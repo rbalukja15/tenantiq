@@ -111,3 +111,20 @@ CELERY_TASK_EAGER_PROPAGATES = True
 # Chunking strategy (ADR-0003). Tunable; sized by a chars-per-token estimate until #12's tokenizer.
 TENANTIQ_CHUNK_TARGET_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_TARGET_TOKENS", "800"))
 TENANTIQ_CHUNK_OVERLAP_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_OVERLAP_TOKENS", "100"))
+
+# Embeddings + vector store (ADR-0004, #12). The embedder is pluggable like the token verifier: a
+# deterministic, dependency-free hashing embedder under pytest (no network/secrets), Ollama otherwise.
+# DIM is fixed because the pgvector column + index need a fixed width; changing the model means a
+# migration plus a re-backfill (manage.py backfill_embeddings).
+TENANTIQ_EMBEDDING_DIM = int(os.environ.get("TENANTIQ_EMBEDDING_DIM", "768"))
+TENANTIQ_EMBEDDING_MODEL = os.environ.get("TENANTIQ_EMBEDDING_MODEL", "nomic-embed-text")
+TENANTIQ_EMBED_BATCH_SIZE = int(os.environ.get("TENANTIQ_EMBED_BATCH_SIZE", "64"))
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+TENANTIQ_EMBEDDER_FACTORY = os.environ.get(
+    "TENANTIQ_EMBEDDER_FACTORY",
+    (
+        "app.embeddings.build_fake_embedder"
+        if "pytest" in sys.modules
+        else "app.embeddings.build_default_embedder"
+    ),
+)

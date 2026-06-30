@@ -40,8 +40,10 @@ jobs:
         run: |
           ruff check .
           black --check .
-      - name: Create non-superuser app role (RLS enforces only for non-superusers; ADR-0002)
-        # Mirrors infra/postgres/init/10-app-role.sql, which docker-compose runs on first DB init.
+      - name: Provision DB — non-superuser app role + pgvector (ADR-0002, #12)
+        # Mirrors infra/postgres/init/{10-app-role,20-vector-extension}.sql, which docker-compose
+        # runs on first DB init. RLS enforces only for non-superusers; pgvector 0.8 isn't a trusted
+        # extension, so a superuser must install it (in template1 too, so the test DB inherits it).
         run: |
           python - <<'PY'
           import psycopg
@@ -49,6 +51,9 @@ jobs:
               conn.execute("CREATE ROLE tenantiq_app LOGIN PASSWORD 'tenantiq_app' NOSUPERUSER NOBYPASSRLS CREATEDB")
               conn.execute("GRANT ALL ON DATABASE tenantiq TO tenantiq_app")
               conn.execute("ALTER SCHEMA public OWNER TO tenantiq_app")
+              conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+          with psycopg.connect("postgres://tenantiq:tenantiq@localhost:5432/template1", autocommit=True) as conn:
+              conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
           PY
       - name: Migrations are up to date
         run: python manage.py makemigrations --check --dry-run

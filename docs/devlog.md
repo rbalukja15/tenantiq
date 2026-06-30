@@ -68,3 +68,25 @@ inline in tests took making `task_always_eager` default on under pytest (mutatin
 app reads it from Django settings doesn't stick) plus `ignore_result=True` so no result backend is
 touched. Logic is split from plumbing — `run_ingestion` is a plain, synchronously-tested function;
 the task is a thin wrapper with retry/backoff. Next: #12 — embeddings into pgvector.
+
+## 2026-06-30 — M2 #12: embeddings + pgvector storage + ADR-0004
+Wrote **ADR-0004** then built it: chunks now become vectors and are searchable. The embedder is
+pluggable behind `TENANTIQ_EMBEDDER_FACTORY` (same trick as the token verifier) — a deterministic,
+stdlib-only `HashingEmbedder` under pytest so CI stays offline and hermetic, and an `OllamaEmbedder`
+(`nomic-embed-text`, 768-dim, over `urllib` — no new dependency) for `make dev`. Anthropic has no
+embeddings API, so the project's Ollama fallback is the real source here. `run_ingestion` now embeds
+chunks before marking a document READY (a parse failure stays permanent → `FAILED`; an embedding
+failure is transient → it propagates so Celery retries). Vectors live in a nullable `Chunk.embedding`
+`VectorField(768)` behind a Postgres-only **HNSW** cosine index; `app.retrieval.nearest_chunks`
+orders the tenant-scoped queryset by cosine distance, so vector search inherits the isolation
+guarantee — a cross-tenant retrieval test proves B never sees A's chunks. A `backfill_embeddings`
+command fills NULL embeddings tenant by tenant, idempotently.
+
+The sharp edge was provisioning. pgvector 0.8 isn't a *trusted* extension, so the non-superuser
+`tenantiq_app` role (the very role that makes RLS bite) can't `CREATE EXTENSION`. On a throwaway
+pgvector container I watched the migration fail as the app role, then fixed it by provisioning the
+extension as a superuser in `template1` (compose init + CI) — so every database, including the pytest
+test DB cloned from `template1`, inherits it and the migration's `CREATE EXTENSION IF NOT EXISTS`
+no-ops. SQLite tolerates the `vector` column (lax typing), so the fast unit path still runs; the HNSW
+index and `<=>` search are Postgres-only, on the same vendor-guarded-migration pattern as RLS (0003,
+0006, now 0008). Next: #13 — ingestion observability (status surfacing + retry/metrics).
