@@ -148,7 +148,14 @@ class Document(TenantOwnedModel):
     content_type = models.CharField(max_length=100, blank=True, default="")
     size_bytes = models.PositiveBigIntegerField(default=0)
     original_filename = models.CharField(max_length=255, blank=True, default="")
+    # Ingestion observability (#13). ``error`` carries the surfaced reason for a FAILED document
+    # (empty otherwise); ``attempts`` counts ingestion runs (bumped on each PROCESSING transition,
+    # so retries are visible); ``updated_at`` tracks the last state change, so a document wedged in
+    # PROCESSING is detectable by age.
+    error = models.TextField(blank=True, default="")
+    attempts = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
         return self.title

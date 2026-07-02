@@ -1,12 +1,15 @@
-"""TDD for the document upload endpoint (issue #10).
+"""TDD for the document write API: upload (issue #10) and retry (issue #13).
 
 A tenant uploads a PDF/text file; the API validates type + size, stores the raw bytes under a
-tenant-scoped path, and persists a PENDING Document visible only to that tenant.
+tenant-scoped path, and persists a PENDING Document visible only to that tenant. A FAILED document
+can be re-ingested via a tenant-scoped retry endpoint — a caller can never retry another tenant's
+document.
 """
 
 from __future__ import annotations
 
 import pytest
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
@@ -167,3 +170,71 @@ def test_upload_triggers_ingestion(api, tenant_a, mint_token, django_capture_on_
         doc = Document.objects.get(id=resp.json()["id"])
         assert doc.status == "ready"
         assert doc.chunks.count() >= 1
+
+
+# --- Retry a failed ingestion (issue #13) ---
+
+
+def make_failed_doc(tenant, body=b"Enough words here for at least one chunk of text."):
+    with tenant_context(tenant):
+        return Document.objects.create(
+            title="notes.txt",
+            content_type="text/plain",
+            original_filename="notes.txt",
+            size_bytes=len(body),
+            file=ContentFile(body, name="notes.txt"),
+            status=Document.Status.FAILED,
+            error="embedding backend unreachable",
+        )
+
+
+def test_retry_reingests_failed_document(
+    api, tenant_a, mint_token, django_capture_on_commit_callbacks
+):
+    doc = make_failed_doc(tenant_a)
+    with django_capture_on_commit_callbacks(execute=True):
+        resp = api.post(f"/api/documents/{doc.id}/retry", **bearer(a_token(mint_token)))
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["error"] == ""  # the stale failure reason is cleared on retry
+    with tenant_context(tenant_a):
+        doc.refresh_from_db()
+        assert doc.status == "ready"
+        assert doc.chunks.count() >= 1
+
+
+def test_retry_rejects_a_document_that_did_not_fail(api, tenant_a, mint_token):
+    with tenant_context(tenant_a):
+        doc = Document.objects.create(title="pending.txt")  # defaults to PENDING
+    resp = api.post(f"/api/documents/{doc.id}/retry", **bearer(a_token(mint_token)))
+    assert resp.status_code == 409
+
+
+def test_retry_cannot_touch_another_tenants_document(api, tenant_a, tenant_b, mint_token):
+    a_doc = make_failed_doc(tenant_a)
+    resp = api.post(f"/api/documents/{a_doc.id}/retry", **bearer(b_token(mint_token)))
+    assert resp.status_code == 404  # scoped lookup hides A's document from B
+    with tenant_context(tenant_a):
+        a_doc.refresh_from_db()
+        assert a_doc.status == "failed"  # and A's document is untouched
+
+
+def test_retry_requires_authentication(api, tenant_a):
+    doc = make_failed_doc(tenant_a)
+    assert api.post(f"/api/documents/{doc.id}/retry").status_code == 401
+
+
+def test_retry_claims_the_document_once(
+    api, tenant_a, mint_token, django_capture_on_commit_callbacks
+):
+    # The first retry enqueues exactly one ingestion and moves the document out of FAILED; a second
+    # retry before it finishes is rejected, so a double-click can't enqueue a duplicate ingestion.
+    doc = make_failed_doc(tenant_a)
+    with django_capture_on_commit_callbacks(execute=False) as first_callbacks:
+        first = api.post(f"/api/documents/{doc.id}/retry", **bearer(a_token(mint_token)))
+    assert first.status_code == 200
+    assert len(first_callbacks) == 1
+
+    with django_capture_on_commit_callbacks(execute=False) as second_callbacks:
+        second = api.post(f"/api/documents/{doc.id}/retry", **bearer(a_token(mint_token)))
+    assert second.status_code == 409
+    assert len(second_callbacks) == 0
