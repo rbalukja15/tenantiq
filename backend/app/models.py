@@ -11,6 +11,7 @@ import uuid
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from pgvector.django import VectorField
 
 from app.tenant_context import NoActiveTenant, get_current_tenant_id
 
@@ -162,6 +163,13 @@ class Chunk(TenantOwnedModel):
     text = models.TextField()
     char_count = models.PositiveIntegerField(default=0)
     token_estimate = models.PositiveIntegerField(default=0)
+    # The chunk's embedding vector (#12). Null until ingestion/backfill fills it; the dimension is
+    # fixed (a pgvector column needs a fixed width), so changing models means a migration + re-backfill.
+    # ``embedding_model`` records the source so a mixed/stale index is detectable.
+    embedding = VectorField(
+        dimensions=settings.TENANTIQ_EMBEDDING_DIM, null=True, blank=True, editable=False
+    )
+    embedding_model = models.CharField(max_length=100, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta(TenantOwnedModel.Meta):

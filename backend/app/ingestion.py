@@ -15,6 +15,7 @@ import logging
 from django.conf import settings
 
 from app.chunking import chunk_text
+from app.embeddings import embed_in_batches, get_embedder
 from app.models import Chunk, Document, Tenant
 from app.parsing import ParseError, extract_text
 from app.tenant_context import tenant_context
@@ -44,6 +45,15 @@ def run_ingestion(document_id: int, tenant_id) -> None:
             doc.save(update_fields=["status"])
             return
 
+        # Embedding happens outside the ParseError guard: a parse failure is permanent (FAILED),
+        # but an embedding failure (e.g. Ollama unreachable) is transient — let it propagate so the
+        # Celery task retries with backoff rather than marking the document permanently FAILED.
+        embedder = get_embedder()
+        vectors = embed_in_batches(
+            embedder,
+            [piece["text"] for piece in pieces],
+            settings.TENANTIQ_EMBED_BATCH_SIZE,
+        )
         Chunk.objects.bulk_create(
             [
                 Chunk(
@@ -53,8 +63,10 @@ def run_ingestion(document_id: int, tenant_id) -> None:
                     text=piece["text"],
                     char_count=piece["char_count"],
                     token_estimate=piece["token_estimate"],
+                    embedding=vector,
+                    embedding_model=embedder.model,
                 )
-                for piece in pieces
+                for piece, vector in zip(pieces, vectors)
             ]
         )
         doc.status = Document.Status.READY

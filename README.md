@@ -68,7 +68,8 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 
 - [ADR-0001 — Stack & scope](docs/adr/0001-stack-and-scope.md)
 - [ADR-0002 — Tenant isolation strategy](docs/adr/0002-tenant-isolation.md)
-- ADR-0003 — Chunking strategy *(M2)*
+- [ADR-0003 — Chunking strategy](docs/adr/0003-chunking-strategy.md)
+- [ADR-0004 — Embeddings & vector store](docs/adr/0004-embeddings-and-vector-store.md)
 
 ## License
 

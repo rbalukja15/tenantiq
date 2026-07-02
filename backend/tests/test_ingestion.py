@@ -7,6 +7,7 @@ document becomes READY with ordered, tenant-scoped chunks; a bad/empty file beco
 from __future__ import annotations
 
 import pytest
+from django.conf import settings as django_settings
 from django.core.files.base import ContentFile
 
 from app.ingestion import run_ingestion
@@ -56,6 +57,23 @@ def test_ingestion_produces_ready_tenant_scoped_chunks():
         assert [c.index for c in chunks] == list(range(len(chunks)))
         assert all(c.tenant_id == a.id for c in chunks)
         assert all(c.text for c in chunks)
+
+
+def test_ingestion_embeds_every_chunk():
+    # READY must mean "chunked AND embedded" — every chunk carries a fixed-dim vector + its source.
+    a = _tenant("acme")
+    text = ("Paragraph one has several words. " * 20) + "\n\n" + ("Paragraph two too. " * 20)
+    doc = _doc(a, body=text.encode())
+
+    run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        chunks = list(Chunk.objects.filter(document=doc))
+        assert chunks
+        for chunk in chunks:
+            assert chunk.embedding is not None
+            assert len(list(chunk.embedding)) == django_settings.TENANTIQ_EMBEDDING_DIM
+            assert chunk.embedding_model  # records which model produced the vector
 
 
 def test_ingestion_marks_failed_on_unparseable_file():
