@@ -90,3 +90,24 @@ test DB cloned from `template1`, inherits it and the migration's `CREATE EXTENSI
 no-ops. SQLite tolerates the `vector` column (lax typing), so the fast unit path still runs; the HNSW
 index and `<=>` search are Postgres-only, on the same vendor-guarded-migration pattern as RLS (0003,
 0006, now 0008). Next: #13 — ingestion observability (status surfacing + retry/metrics).
+
+## 2026-07-02 — M2 #13: ingestion observability + retry + ADR-0005 — M2 complete
+Wrote **ADR-0005** then closed the async pipeline's biggest blind spot: a *transient* failure that
+exhausted its retries used to leave a document wedged in `PROCESSING` forever, with no record of why.
+Now the Celery task carries an `IngestTask.on_failure` hook that fires only when retries are spent
+and records `FAILED` + the reason via `mark_ingestion_failed`; permanent `ParseError`s are still
+recorded immediately (no retry). Three fields make state observable — `error` (the surfaced reason,
+capped), `attempts` (bumped per try), and `updated_at` (so a stuck doc is findable by age) — all
+read-only over the API. A tenant-scoped `POST /api/documents/<id>/retry` re-ingests a FAILED
+document: the lookup goes through the scoped manager, so another tenant's id is a 404, not a
+cross-tenant action (a test proves B can't retry or observe A's doc); a non-FAILED doc is a 409.
+
+The sharp edge was transactions. `tenant_context` opens `transaction.atomic()` on Postgres (to scope
+the RLS `SET LOCAL`), so my first cut — record the attempt and do the work in one block — quietly
+rolled the `attempts` increment back with every transient failure. Real-Postgres tests caught it
+(the doc read back `pending`, not `processing`). The fix splits `run_ingestion` into two phases: a
+tiny first transaction commits "we are attempting this" (PROCESSING + `attempts++`), then a second
+does the risky parse/embed/persist atomically — so a transient failure rolls back only the work and
+`attempts` stays honest. Verified the whole suite on a throwaway pgvector container as the
+non-superuser `tenantiq_app` role (RLS live), not just SQLite. That closes M2: upload → parse/chunk
+→ embed → observe/retry. Next: M3 — the RAG query engine.

@@ -70,6 +70,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0002 — Tenant isolation strategy](docs/adr/0002-tenant-isolation.md)
 - [ADR-0003 — Chunking strategy](docs/adr/0003-chunking-strategy.md)
 - [ADR-0004 — Embeddings & vector store](docs/adr/0004-embeddings-and-vector-store.md)
+- [ADR-0005 — Ingestion observability & retry model](docs/adr/0005-ingestion-observability.md)
 
 ## License
 

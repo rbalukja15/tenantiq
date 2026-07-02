@@ -77,3 +77,15 @@ def test_requires_authentication(api, tenants):
 def test_contextvar_cleared_after_request(api, tenants, mint_token):
     api.get("/api/documents", **bearer(mint_token(sub="alice")))
     assert get_current_tenant_id() is None
+
+
+def test_list_surfaces_observability_fields(api, tenants, mint_token):
+    # Ingestion state must be observable over the API (issue #13): status + attempt count + the
+    # surfaced failure reason travel with every document.
+    resp = api.get("/api/documents", **bearer(mint_token(sub="alice")))
+    assert resp.status_code == 200
+    doc = resp.json()[0]
+    assert doc["status"] == "pending"
+    assert doc["error"] == ""
+    assert doc["attempts"] == 0
+    assert "updated_at" in doc
