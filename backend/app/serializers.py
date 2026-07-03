@@ -27,19 +27,25 @@ class DocumentSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "status",
+            "error",
+            "attempts",
             "content_type",
             "size_bytes",
             "original_filename",
             "created_at",
+            "updated_at",
             "file",
         ]
         read_only_fields = [
             "id",
             "status",
+            "error",
+            "attempts",
             "content_type",
             "size_bytes",
             "original_filename",
             "created_at",
+            "updated_at",
         ]
         extra_kwargs = {"title": {"required": False}}
 
