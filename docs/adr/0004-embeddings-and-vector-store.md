@@ -77,3 +77,38 @@ keep retrieval tenant-scoped like every other data path. Forces at play:
 - Vendor-guarded, Postgres-only migrations are now a settled pattern — used three times (0003 and
   0006 for RLS, 0008 for the vector index).
 - Implemented by #12; consumed by the RAG query engine (M3) and the evaluation harness (M5).
+
+## Addendum (2026-07-05, #44): iterative index scans for tenant-filtered search
+
+**Context.** The shared, all-tenant HNSW index interacts badly with tenant filtering. Postgres runs
+the tenant predicate (scoped manager + RLS) as a *post-filter* over the index's bounded candidate
+list (`hnsw.ef_search`, default 40). Reproduced on `pgvector/pgvector:pg16` (0.8.3): once a tenant
+is large enough (~25k+ chunks) that the planner prefers the HNSW path over the `tenant_id` btree,
+and another tenant's corpus dominates the query's neighbourhood, every candidate is filtered out and
+`nearest_chunks` returns **fewer than `k` — possibly zero — rows**, even though the tenant has
+relevant chunks. It is a recall bug, not a leak: RLS still holds; results are silently *missing*.
+Small tenants are unaffected (the planner uses the btree + exact sort), which is why the original
+`test_retrieval.py` fixtures never surfaced it.
+
+**Decision.** `nearest_chunks` sets `SET LOCAL hnsw.iterative_scan = relaxed_order` (pgvector 0.8+),
+so the HNSW scan re-scans with a growing candidate list until `k` rows survive the tenant filter.
+`relaxed_order` is chosen over `strict_order` because it recalls more within the scan budget —
+empirically `strict_order` stopped early and still returned fewer than `k` on the regression case —
+and exact "nearest first" ordering is cheaply restored by re-ranking the `k` survivors in Python.
+`SET LOCAL` scopes the setting to the surrounding transaction (`tenant_context` opens one on
+Postgres), so it can't leak across a pooled connection; off Postgres it's a no-op.
+
+**Rejected / deferred.**
+- **`strict_order`** — preserves index order but under-recalls here; ordering is handled in Python
+  instead, so recall is the only axis left and `relaxed_order` wins it.
+- **Per-tenant partial indexes / table partitioning by tenant** — the real scale fix (each tenant's
+  search hits an index containing only its rows, so post-filtering can't starve it), but a larger
+  change than #44 warrants. It becomes worthwhile when single-tenant corpora or tenant count grow;
+  tracked as the scale-up path here.
+- **Raising `ef_search` globally** — only pushes the cliff out; a dominating tenant with more than
+  `ef_search` near neighbours still starves the others, and it slows every query.
+
+**Consequences.** Retrieval recall is correct regardless of relative tenant sizes, proven by a
+regression test that forces the HNSW path at fixture scale (`enable_seqscan`/`sort` off, small
+`ef_search`) and asserts a starved tenant still gets `k`. The retrieval path now depends on pgvector
+**0.8+** (the compose image and CI are 0.8.3). Implemented by #44.
