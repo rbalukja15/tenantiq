@@ -111,3 +111,25 @@ does the risky parse/embed/persist atomically — so a transient failure rolls b
 `attempts` stays honest. Verified the whole suite on a throwaway pgvector container as the
 non-superuser `tenantiq_app` role (RLS live), not just SQLite. That closes M2: upload → parse/chunk
 → embed → observe/retry. Next: M3 — the RAG query engine.
+
+## 2026-07-05 — M3 #44: retrieval recall cliff (HNSW + tenant filter)
+A whole-project review (a Fable 5 multi-agent pass, kicked off after M2) empirically found a recall
+bug hiding under the vector search before M3 could build on it. The single, shared HNSW index spans
+every tenant's rows; Postgres applies the tenant filter (scoped manager + RLS) as a *post-filter*
+over the index's bounded `ef_search` candidate list. So once a tenant is large enough that the
+planner prefers the HNSW path over the `tenant_id` btree, and another tenant's corpus owns the
+query's neighbourhood, `nearest_chunks` returns fewer than `k` — reproduced returning **zero** rows
+for a tenant holding tens of thousands of chunks. Not a leak (RLS held throughout); results were
+silently *missing*, which is the worst kind of retrieval bug — the answer engine would just say
+"not found". The original fixtures (1–8 chunks) never saw it because at that scale the planner uses
+an exact btree sort, not the index.
+
+The fix is one line of intent: `SET LOCAL hnsw.iterative_scan = relaxed_order` on the retrieval
+path (pgvector 0.8+), so the scan keeps widening its candidate list until `k` rows survive the
+tenant filter. Two things I only got right by testing on real Postgres: `strict_order` *under*-recalls
+(it stopped at 4 of 5 on the regression case) so `relaxed_order` is the correct choice, with exact
+"nearest first" restored by re-ranking the `k` survivors in Python; and the regression test has to
+*force* the HNSW path at fixture scale (`enable_seqscan`/`sort` off, a small `ef_search`) because the
+real cliff only appears at ~25k+ rows — impractical to seed in CI. Recorded as an ADR-0004 addendum,
+with per-tenant partial indexes / partitioning noted as the scale-up path. Next in M3: #45 (faithful
+chunk text) and #14/#48 (retrieval + the query/streaming endpoint).
