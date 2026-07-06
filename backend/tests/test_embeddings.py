@@ -14,6 +14,8 @@ import math
 import pytest
 
 from app.embeddings import (
+    EmbeddingCountError,
+    EmbeddingDimensionError,
     HashingEmbedder,
     OllamaEmbedder,
     build_default_embedder,
@@ -176,3 +178,74 @@ def test_embed_in_batches_empty_is_no_call():
 
     assert embed_in_batches(_Counting(dim=DIM), [], batch_size=2) == []
     assert calls == []
+
+
+# --- #46: the embedder boundary rejects a count or dimension mismatch loudly ---
+
+
+class _DropsTail(HashingEmbedder):
+    """A backend that returns one fewer vector than it was given (truncated / contract drift)."""
+
+    def embed_documents(self, texts):
+        return super().embed_documents(texts)[:-1]
+
+
+class _WrongDim(HashingEmbedder):
+    """A backend whose vectors are the wrong width (operator pointed at a mismatched model)."""
+
+    def embed_documents(self, texts):
+        return [[0.0] * (self.dim + 1) for _ in texts]
+
+
+class _OverCounts(HashingEmbedder):
+    """A backend that returns one *more* vector than it was given."""
+
+    def embed_documents(self, texts):
+        vectors = super().embed_documents(texts)
+        return vectors + [vectors[0]] if vectors else [[0.0] * self.dim]
+
+
+class _NonSequence(HashingEmbedder):
+    """A backend that returns ``None`` for a vector (e.g. Ollama on a model error)."""
+
+    def embed_documents(self, texts):
+        return [None for _ in texts]
+
+
+def test_embed_in_batches_rejects_a_short_vector_count():
+    # A backend returning n-1 vectors would silently drop the tail chunk; refuse it instead.
+    with pytest.raises(EmbeddingCountError) as exc:
+        embed_in_batches(_DropsTail(dim=DIM), ["a", "b", "c"], batch_size=100)
+    assert "2" in str(exc.value) and "3" in str(exc.value)  # names the actual counts
+
+
+def test_embed_in_batches_rejects_a_wrong_dimension():
+    # A wrong-dim vector would later fail cryptically in pgvector; fail here with the config hint.
+    with pytest.raises(EmbeddingDimensionError) as exc:
+        embed_in_batches(_WrongDim(dim=DIM), ["a", "b"], batch_size=100)
+    message = str(exc.value)
+    assert str(DIM) in message and str(DIM + 1) in message  # expected vs actual dimension
+    assert "TENANTIQ_EMBEDDING_DIM" in message  # points the operator at the setting
+
+
+def test_embed_in_batches_count_check_spans_batches():
+    # The count is validated over the whole result, not per batch, so a tail dropped in the last
+    # batch is still caught when batching splits the work.
+    with pytest.raises(EmbeddingCountError):
+        embed_in_batches(_DropsTail(dim=DIM), ["a", "b", "c", "d", "e"], batch_size=2)
+
+
+def test_embed_in_batches_rejects_an_over_count():
+    # A mismatch in *either* direction is caught — an extra vector is as wrong as a missing one.
+    with pytest.raises(EmbeddingCountError):
+        embed_in_batches(_OverCounts(dim=DIM), ["a", "b"], batch_size=100)
+
+
+def test_embed_in_batches_rejects_a_non_sequence_vector():
+    # A backend returning a non-vector (None / scalar) must fail with a message that names the
+    # problem — not a bare "object of type NoneType has no len()" from the length check.
+    with pytest.raises(EmbeddingDimensionError) as exc:
+        embed_in_batches(_NonSequence(dim=DIM), ["a", "b"], batch_size=100)
+    message = str(exc.value)
+    assert "TENANTIQ_EMBEDDING_DIM" in message
+    assert "hashing-fake-v1" in message  # names the model, not a Python TypeError

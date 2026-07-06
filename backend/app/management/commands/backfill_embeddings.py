@@ -39,10 +39,13 @@ class Command(BaseCommand):
                 pending = list(Chunk.objects.filter(embedding__isnull=True).order_by("id"))
                 if not pending:
                     continue
+                # embed_in_batches validates the count + dimension of the backend's response (#46),
+                # so a contract-violating backend aborts the command here with a clear error instead
+                # of writing a mismatched set; strict=True guards the one-to-one zip belt-and-braces.
                 vectors = embed_in_batches(
                     embedder, [chunk.text for chunk in pending], options["batch_size"]
                 )
-                for chunk, vector in zip(pending, vectors):
+                for chunk, vector in zip(pending, vectors, strict=True):
                     chunk.embedding = vector
                     chunk.embedding_model = embedder.model
                 Chunk.objects.bulk_update(pending, ["embedding", "embedding_model"])

@@ -21,7 +21,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from app.chunking import chunk_text
-from app.embeddings import embed_in_batches, get_embedder
+from app.embeddings import EmbeddingDimensionError, embed_in_batches, get_embedder
 from app.models import Chunk, Document, Tenant
 from app.parsing import ParseError, extract_text
 from app.tenant_context import tenant_context
@@ -61,19 +61,28 @@ def run_ingestion(document_id: int, tenant_id) -> None:
             )
             if not pieces:
                 raise ParseError("No extractable text.")
-        except ParseError as exc:
-            logger.warning("Ingestion failed for document %s (tenant %s)", document_id, tenant_id)
+
+            embedder = get_embedder()
+            # embed_in_batches validates the backend's response (#46): a wrong dimension raises
+            # EmbeddingDimensionError (caught here as permanent), a short count raises
+            # EmbeddingCountError, which — like any transient backend error — propagates to retry.
+            vectors = embed_in_batches(
+                embedder,
+                [piece["text"] for piece in pieces],
+                settings.TENANTIQ_EMBED_BATCH_SIZE,
+            )
+        except (ParseError, EmbeddingDimensionError) as exc:
+            # Permanent failures: an unreadable/empty file, or a static mis-configuration (a model
+            # whose vectors don't match TENANTIQ_EMBEDDING_DIM). Record the reason and stop — a
+            # retry would only hit the same error, so we don't burn the task's backoff on it.
+            logger.warning(
+                "Ingestion failed for document %s (tenant %s): %s", document_id, tenant_id, exc
+            )
             doc.status = Document.Status.FAILED
             doc.error = str(exc)[:MAX_ERROR_LENGTH]
             doc.save(update_fields=["status", "error", "updated_at"])
             return
 
-        embedder = get_embedder()
-        vectors = embed_in_batches(
-            embedder,
-            [piece["text"] for piece in pieces],
-            settings.TENANTIQ_EMBED_BATCH_SIZE,
-        )
         # Re-ingestion (a retry) must be idempotent: drop any chunks from a prior run before writing
         # the new set, so the unique (document, index) constraint can't trip. This runs in phase 2's
         # transaction, so the delete + re-create are atomic — a failure restores the old chunks.
@@ -90,7 +99,9 @@ def run_ingestion(document_id: int, tenant_id) -> None:
                     embedding=vector,
                     embedding_model=embedder.model,
                 )
-                for piece, vector in zip(pieces, vectors)
+                # strict=True is a belt-and-suspenders invariant backing embed_in_batches' count
+                # check: one vector per chunk, never a silent zip truncation onto the shorter list.
+                for piece, vector in zip(pieces, vectors, strict=True)
             ]
         )
         doc.status = Document.Status.READY

@@ -25,6 +25,27 @@ from django.utils.module_loading import import_string
 _TOKEN_RE = re.compile(r"\w+")
 
 
+class EmbeddingError(RuntimeError):
+    """An embedding backend violated its contract (wrong count or dimension) — see subclasses."""
+
+
+class EmbeddingCountError(EmbeddingError):
+    """The backend returned a different number of vectors than inputs.
+
+    Possibly transient (a truncated / interrupted response), so ingestion lets it propagate and the
+    Celery task retries; if it persists, the retries exhaust into an observable FAILED document.
+    """
+
+
+class EmbeddingDimensionError(EmbeddingError):
+    """A returned vector's dimension does not match the configured ``TENANTIQ_EMBEDDING_DIM``.
+
+    A static mis-configuration (e.g. pointing at a 1024-dim model with the column/index at 768) that
+    cannot self-heal, so ingestion treats it as *permanent* and fails the document immediately rather
+    than burning retry backoff on an error every attempt will hit.
+    """
+
+
 @runtime_checkable
 class Embedder(Protocol):
     """Turns text into comparable vectors. ``dim`` is fixed; ``model`` identifies the source."""
@@ -124,8 +145,50 @@ def embed_in_batches(embedder: Embedder, texts: list[str], batch_size: int) -> l
 
     Keeps each backend request bounded for large documents while returning exactly one vector per
     input. Identical to a single ``embed_documents`` call apart from how the work is chunked.
+
+    This is the single choke point every ingestion path (``run_ingestion`` and the
+    ``backfill_embeddings`` command) routes through, so it is where the backend's response is
+    validated (#46): the returned vectors must match the inputs *one-to-one* and carry the
+    configured dimension. Enforcing it here — before any caller ``zip``s vectors onto chunks — means
+    a contract-violating backend can never silently drop the tail chunk or store a mis-sized vector.
     """
     vectors: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         vectors.extend(embedder.embed_documents(texts[start : start + batch_size]))
+    _validate_vectors(
+        vectors, expected_count=len(texts), expected_dim=embedder.dim, model=embedder.model
+    )
     return vectors
+
+
+def _validate_vectors(
+    vectors: list[list[float]], *, expected_count: int, expected_dim: int, model: str
+) -> None:
+    """Assert the backend returned exactly ``expected_count`` vectors, each ``expected_dim`` wide.
+
+    A count mismatch raises :class:`EmbeddingCountError` (possibly transient); a width mismatch
+    raises :class:`EmbeddingDimensionError` (a permanent mis-configuration). Both messages name the
+    actual numbers and the model so the failure reason points straight at the real problem.
+    """
+    if len(vectors) != expected_count:
+        raise EmbeddingCountError(
+            f"Embedding backend returned {len(vectors)} vector(s) for {expected_count} input(s) "
+            f"(model={model!r}); refusing to persist a partial or mismatched set."
+        )
+    for vector in vectors:
+        try:
+            actual_dim = len(vector)
+        except TypeError:
+            # A non-sequence element (e.g. Ollama returns a null embedding on a model error) —
+            # surface it as a dimension problem naming the model, not a bare len() TypeError.
+            raise EmbeddingDimensionError(
+                f"Embedding backend returned a non-vector value ({type(vector).__name__}) where a "
+                f"{expected_dim}-dim vector was expected (TENANTIQ_EMBEDDING_DIM={expected_dim}, "
+                f"model={model!r}); check the embedding backend / model configuration."
+            ) from None
+        if actual_dim != expected_dim:
+            raise EmbeddingDimensionError(
+                f"Embedding backend returned a {actual_dim}-dim vector but "
+                f"TENANTIQ_EMBEDDING_DIM={expected_dim} (model={model!r}); "
+                f"check the embedding model / dimension configuration."
+            )
