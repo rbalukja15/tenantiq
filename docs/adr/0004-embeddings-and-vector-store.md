@@ -112,3 +112,43 @@ Postgres), so it can't leak across a pooled connection; off Postgres it's a no-o
 regression test that forces the HNSW path at fixture scale (`enable_seqscan`/`sort` off, small
 `ef_search`) and asserts a starved tenant still gets `k`. The retrieval path now depends on pgvector
 **0.8+** (the compose image and CI are 0.8.3). Implemented by #44.
+
+## Addendum (2026-07-06, #46): validating the embedding backend's response
+
+**Context.** "READY means chunked **and** embedded" is only true if there is exactly one
+correctly-sized vector per chunk. But `run_ingestion` did `zip(pieces, vectors)` with no length
+check, and `OllamaEmbedder.embed_documents` returned the HTTP response's `embeddings` verbatim. A
+backend returning fewer vectors than inputs (contract drift, a truncated response, a future
+provider) silently **dropped the tail chunks and still marked the document READY** — data loss
+against the invariant. A wrong-dimension vector (an operator pointing at, say, a 1024-dim model
+while `TENANTIQ_EMBEDDING_DIM=768`) slipped past into a cryptic pgvector write, and — being a
+*permanent* config error — burned all three retry backoffs before failing unhelpfully.
+
+**Decision.** Validate the backend's response at `embed_in_batches` — the single choke point both
+`run_ingestion` and the `backfill_embeddings` command route through — before any caller `zip`s
+vectors onto chunks. The count must equal the input count (`EmbeddingCountError`) and every vector
+must be `embedder.dim` wide (`EmbeddingDimensionError`); both messages name the actual numbers and
+the model. The two failures are classified differently on purpose:
+
+- **Count mismatch → transient.** It can be a truncated / interrupted response, so `run_ingestion`
+  lets it propagate and the Celery task retries; if it persists, the retries exhaust into an
+  observable FAILED document carrying the clear reason (via `on_failure`). Never READY.
+- **Dimension mismatch → permanent.** A model whose width doesn't match the column/index is a static
+  mis-configuration that cannot self-heal, so `run_ingestion` records FAILED immediately (like a
+  `ParseError`) rather than burning retry backoff on an error every attempt would hit.
+
+`zip(..., strict=True)` at both write sites is a cheap belt-and-suspenders invariant backing the
+boundary check.
+
+**Rejected / deferred.**
+- **Validating only with `zip(strict=True)`** — catches the under-count at the write site but raises
+  an opaque `ValueError` ("zip() argument 2 is shorter…"), not a message naming the real problem,
+  and does nothing for a wrong *dimension* or for the backfill path. Kept it as the secondary guard,
+  not the primary one.
+- **Validating inside each `Embedder`** — the count guard must live on the shared path so a generic
+  stub / any provider is covered; a per-embedder check wouldn't catch a mis-implemented one and would
+  duplicate the logic.
+
+**Consequences.** A count or dimension mismatch can never produce a READY document with
+missing/mismatched chunks; the failure reason names the actual problem, and a permanent config error
+fails fast instead of after three backoffs. Implemented by #46.

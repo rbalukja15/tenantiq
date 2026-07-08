@@ -133,3 +133,25 @@ tenant filter. Two things I only got right by testing on real Postgres: `strict_
 real cliff only appears at ~25k+ rows — impractical to seed in CI. Recorded as an ADR-0004 addendum,
 with per-tenant partial indexes / partitioning noted as the scale-up path. Next in M3: #45 (faithful
 chunk text) and #14/#48 (retrieval + the query/streaming endpoint).
+
+## 2026-07-06 — M3 #46: validate embedding count & dimension
+Closed a silent-data-loss gap the same review surfaced: ingestion `zip(pieces, vectors)`d with no
+length check and the embedder returned the backend's `embeddings` verbatim, so a backend handing
+back fewer vectors than chunks (contract drift, a truncated response) **dropped the tail chunks and
+still marked the document READY** — a direct violation of the suite's own "READY means chunked AND
+embedded" invariant. A wrong-dimension vector (operator points at a 1024-dim model with the column at
+768) was worse: it sailed past into a cryptic pgvector error, and being a permanent config mistake,
+burned all three retry backoffs first.
+
+The guard lives at `embed_in_batches`, the one choke point both `run_ingestion` and the
+`backfill_embeddings` command share — so a single check covers every ingestion path and works with
+any embedder (including the stubs the tests inject). It raises `EmbeddingCountError` on a count
+mismatch and `EmbeddingDimensionError` on a wrong width, each message naming the actual numbers and
+the model. The interesting call was classifying the two: a **count** mismatch is treated as
+*transient* (it may be a truncated response) so it propagates and the task retries, exhausting into
+an observable FAILED doc if it persists; a **dimension** mismatch is *permanent* (a static
+mis-config that can't self-heal) so ingestion fails the document immediately instead of wasting the
+backoff — directly answering the "burns 3 retries" complaint. `zip(..., strict=True)` at both write
+sites backs the boundary check belt-and-braces. Proven on real Postgres as `tenantiq_app`: the
+wrong-dim document now fails at the embedder boundary with a config hint, never reaching pgvector.
+Recorded as an ADR-0004 addendum. Next in M3: #45 (faithful chunk text) and #14/#48 (query engine).

@@ -12,6 +12,7 @@ from io import StringIO
 import pytest
 from django.core.management import call_command
 
+from app.embeddings import EmbeddingCountError, HashingEmbedder
 from app.models import Chunk, Document, Tenant
 from app.tenant_context import tenant_context
 
@@ -62,6 +63,28 @@ def test_backfill_is_idempotent():
     with tenant_context(a):
         assert Chunk.objects.filter(embedding__isnull=True).count() == 0
     assert "0 chunk" in out.getvalue()  # nothing left to do
+
+
+def test_backfill_aborts_loudly_on_count_mismatch(monkeypatch):
+    # The backfill routes through the same embedder boundary as ingestion (#46), so a backend that
+    # returns too few vectors aborts with a clear error rather than writing a mismatched set —
+    # leaving the NULL embeddings untouched for a corrected re-run.
+    class _DropsTail(HashingEmbedder):
+        def embed_documents(self, texts):
+            return super().embed_documents(texts)[:-1]
+
+    a = _tenant("acme")
+    _chunk_without_embedding(a, "one chunk that needs embedding")
+    _chunk_without_embedding(a, "another chunk that needs embedding")
+    monkeypatch.setattr(
+        "app.management.commands.backfill_embeddings.get_embedder", lambda: _DropsTail(dim=768)
+    )
+
+    with pytest.raises(EmbeddingCountError):
+        call_command("backfill_embeddings")
+
+    with tenant_context(a):
+        assert Chunk.objects.filter(embedding__isnull=True).count() == 2  # nothing written
 
 
 def test_backfill_can_target_a_single_tenant():

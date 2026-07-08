@@ -10,6 +10,8 @@ import pytest
 from django.conf import settings as django_settings
 from django.core.files.base import ContentFile
 
+from app.chunking import chunk_text
+from app.embeddings import EmbeddingCountError, HashingEmbedder
 from app.ingestion import run_ingestion
 from app.models import Chunk, Document, Tenant
 from app.tenant_context import tenant_context
@@ -168,6 +170,91 @@ def test_transient_failure_propagates_and_leaves_processing(monkeypatch):
         doc.refresh_from_db()
         assert doc.status == Document.Status.PROCESSING
         assert doc.attempts == 1
+        assert Chunk.objects.filter(document=doc).count() == 0
+
+
+# --- Embedding count / dimension validation: never READY with missing chunks (issue #46) ---
+
+
+class _DropsTailEmbedder(HashingEmbedder):
+    """Returns one fewer vector than chunks — the silent tail-drop #46 must refuse."""
+
+    def embed_documents(self, texts):
+        return super().embed_documents(texts)[:-1]
+
+
+class _WrongDimEmbedder(HashingEmbedder):
+    """Returns vectors of the wrong width — a permanent model/dimension mis-configuration."""
+
+    def embed_documents(self, texts):
+        return [[0.0] * (self.dim + 1) for _ in texts]
+
+
+def _multi_chunk_body() -> bytes:
+    """A body large enough to split into several chunks, so tail-drop has a *tail* to drop.
+
+    The headline #46 bug is a *multi-chunk* document losing its last chunk(s), so the regression
+    tests must feed a genuinely multi-chunk document — a single-chunk doc can't exhibit it. Sized
+    comfortably past the ~800-token (~3200-char) chunk target; asserted below so it can't silently
+    regress to one chunk if chunk sizing changes.
+    """
+    paragraph = "Revenue for the quarter grew across every region and product line. " * 10
+    return "\n\n".join(paragraph for _ in range(12)).encode()
+
+
+def _assert_multi_chunk(body: bytes) -> None:
+    pieces = chunk_text(
+        body.decode(),
+        target_tokens=django_settings.TENANTIQ_CHUNK_TARGET_TOKENS,
+        overlap_tokens=django_settings.TENANTIQ_CHUNK_OVERLAP_TOKENS,
+    )
+    assert len(pieces) > 1, "test premise: body must produce multiple chunks to exercise tail-drop"
+
+
+def test_ingestion_never_ready_when_backend_returns_too_few_vectors(monkeypatch):
+    # A backend returning n-1 vectors used to drop the tail chunk of a multi-chunk document and
+    # still mark it READY. A short count is treated as *transient* (it may be a truncated response),
+    # so run_ingestion propagates for the task to retry — the document stays PROCESSING (never
+    # READY, never permanently FAILED), with the attempt recorded and not a single partial chunk.
+    a = _tenant("acme")
+    body = _multi_chunk_body()
+    _assert_multi_chunk(body)
+    doc = _doc(a, body=body)
+    monkeypatch.setattr(
+        "app.ingestion.get_embedder",
+        lambda: _DropsTailEmbedder(django_settings.TENANTIQ_EMBEDDING_DIM),
+    )
+
+    with pytest.raises(EmbeddingCountError):
+        run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        doc.refresh_from_db()
+        assert doc.status == Document.Status.PROCESSING  # transient: left for the task to retry
+        assert doc.attempts == 1
+        assert doc.error == ""  # not marked with a terminal reason yet
+        assert Chunk.objects.filter(document=doc).count() == 0  # no partial write
+
+
+def test_ingestion_fails_permanently_on_wrong_dimension(monkeypatch):
+    # A wrong-dim model is a *permanent* config error: fail the document immediately with a clear
+    # reason instead of burning retry backoff on an error every attempt will hit. Use a multi-chunk
+    # document so the atomic "all chunks or none" rollback is genuinely exercised, not just 1 chunk.
+    a = _tenant("acme")
+    body = _multi_chunk_body()
+    _assert_multi_chunk(body)
+    doc = _doc(a, body=body)
+    monkeypatch.setattr(
+        "app.ingestion.get_embedder",
+        lambda: _WrongDimEmbedder(django_settings.TENANTIQ_EMBEDDING_DIM),
+    )
+
+    run_ingestion(doc.id, a.id)  # permanent -> recorded, does not raise (no retry)
+
+    with tenant_context(a):
+        doc.refresh_from_db()
+        assert doc.status == Document.Status.FAILED
+        assert "TENANTIQ_EMBEDDING_DIM" in doc.error  # the reason names the actual problem
         assert Chunk.objects.filter(document=doc).count() == 0
 
 
