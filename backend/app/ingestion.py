@@ -96,6 +96,8 @@ def run_ingestion(document_id: int, tenant_id) -> None:
                     text=piece["text"],
                     char_count=piece["char_count"],
                     token_estimate=piece["token_estimate"],
+                    start_offset=piece["start_offset"],  # exact slice of the source text (#45)
+                    end_offset=piece["end_offset"],
                     embedding=vector,
                     embedding_model=embedder.model,
                 )

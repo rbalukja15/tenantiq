@@ -170,6 +170,12 @@ class Chunk(TenantOwnedModel):
     text = models.TextField()
     char_count = models.PositiveIntegerField(default=0)
     token_estimate = models.PositiveIntegerField(default=0)
+    # Character span of this chunk in the extracted source text (#45): ``text`` is exactly
+    # ``source[start_offset:end_offset]``, so a citation can quote it verbatim and address it by
+    # offset. Chunks created before #45 carry the defaults (0, 0) and stale text — a re-ingestion
+    # (the retry endpoint) refreshes both. Zero-width by default so pre-#45 rows are unambiguous.
+    start_offset = models.PositiveIntegerField(default=0)
+    end_offset = models.PositiveIntegerField(default=0)
     # The chunk's embedding vector (#12). Null until ingestion/backfill fills it; the dimension is
     # fixed (a pgvector column needs a fixed width), so changing models means a migration + re-backfill.
     # ``embedding_model`` records the source so a mixed/stale index is detectable.

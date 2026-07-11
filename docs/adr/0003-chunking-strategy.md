@@ -64,3 +64,33 @@ Forces at play:
   `0006_chunk_rls.py`), mirroring `0003`.
 
 Implemented by: #11 (parsing + chunking + Celery); consumed by #12 (embeddings) and M3 (retrieval).
+
+## Addendum (2026-07-11, #45): verbatim, offset-addressable chunks
+
+**Context.** The first implementation split with `text.split(sep)` (which *discards* the separator)
+and re-joined pieces with a single space, so for any document past the ~3200-char target the stored
+`Chunk.text` was **not a substring of the source** — sentence periods and all paragraph/line
+structure were destroyed (a realistic document produced 3 chunks, 0 of them substrings). That breaks
+verbatim citation quoting (#15), makes character-offset citations impossible, and corrupts
+faithfulness evaluation (M5).
+
+**Decision.** Rewrite the splitter to work in **offsets**: a forward scan chooses a cut point with
+the same boundary preference (paragraph → line → sentence → word → hard cut, via `rfind` within the
+target window) and emits `(start_offset, end_offset)` spans, so each chunk is exactly
+`source[start_offset:end_offset]` — separators stay attached and nothing is mutated. Overlap is
+expressed as consecutive spans that *share* a range (the next span starts `overlap` chars before the
+previous cut, snapped to a word boundary), so every chunk stays individually verbatim while still
+carrying boundary context. Offsets are relative to the extracted source text passed into
+`chunk_text`, giving citations a stable anchor. `Chunk` gains `start_offset` / `end_offset` columns
+(migration `0010`), populated during ingestion.
+
+**Consequences.**
+- Every stored chunk is an exact, offset-addressable slice of the extracted source, proven by a
+  substring-fidelity test (`chunk["text"] == source[start:end]` for every chunk).
+- **Chunks created before #45 carry mutated text and default `(0, 0)` offsets.** They are refreshed
+  by a **re-ingestion** — the `POST /api/documents/<id>/retry` endpoint (#13) re-runs the pipeline
+  and rewrites the chunk set; `backfill_embeddings` only fills embeddings and does **not** refresh
+  text/offsets. There is no in-place migration of chunk boundaries (consistent with the re-ingestion
+  note above).
+- Retrieval and embeddings are unaffected (same chunk sizes and ordering); only the text is now
+  faithful and offset-addressable. Implemented by #45; consumed by #15 (citations) and M5 (eval).
