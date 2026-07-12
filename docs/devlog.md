@@ -155,3 +155,26 @@ backoff — directly answering the "burns 3 retries" complaint. `zip(..., strict
 sites backs the boundary check belt-and-braces. Proven on real Postgres as `tenantiq_app`: the
 wrong-dim document now fails at the embedder boundary with a config hint, never reaching pgvector.
 Recorded as an ADR-0004 addendum. Next in M3: #45 (faithful chunk text) and #14/#48 (query engine).
+
+## 2026-07-11 — M3 #45: faithful, offset-addressable chunk text
+Fixed a data-fidelity bug that would have quietly poisoned citations and eval before M3 could rely
+on them. The splitter used `text.split(sep)` (which *discards* the separator) and re-joined pieces
+with a single space, so for any document past the ~3200-char target the stored `Chunk.text` was **not
+a substring of the source** — every sentence period and all paragraph/line structure gone. Measured
+on a realistic 6.2k-char document: 3 chunks, **0** of them substrings of the source. A verbatim
+citation (#15) could never match, character offsets were impossible, and M5 faithfulness scoring
+would be measuring corrupted text.
+
+The rewrite makes the splitter work purely in **offsets**. A forward scan picks a cut with the same
+boundary preference as before (paragraph → line → sentence → word → hard cut, via `rfind` inside the
+target window) and emits `(start, end)` spans; each chunk is then exactly `source[start:end]`, so
+separators stay attached and nothing is mutated. Overlap became the elegant part: instead of copying
+a tail string, the next span simply *starts earlier* (by the overlap, snapped to a word boundary), so
+consecutive chunks share a range yet each remains individually verbatim. `Chunk` gained
+`start_offset`/`end_offset` (migration `0010`), populated during ingestion — the stable anchor
+citations will resolve against. All eight original chunking tests still pass unchanged (sizes,
+ordering, overlap, hard-split behaviour preserved); new tests assert `chunk.text == source[start:end]`
+at both the unit and ingestion levels. Existing chunks carry stale text + `(0,0)` offsets until a
+re-ingestion (the #13 retry endpoint) rewrites them; documented in an ADR-0003 addendum. Verified on
+real Postgres as `tenantiq_app` (118 passed, RLS live). Next in M3: #14/#48 (the query/streaming
+endpoint) and #15 (citations, which this unblocks).

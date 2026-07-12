@@ -78,6 +78,28 @@ def test_ingestion_embeds_every_chunk():
             assert chunk.embedding_model  # records which model produced the vector
 
 
+def test_ingestion_stores_offset_addressable_chunks():
+    # #45: every stored chunk must be an exact slice of the extracted source, addressable by its
+    # (start_offset, end_offset) — the anchor citations will resolve against.
+    from app.parsing import extract_text
+
+    a = _tenant("acme")
+    body = _multi_chunk_body()
+    _assert_multi_chunk(body)
+    doc = _doc(a, body=body)
+
+    run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        with doc.file.open("rb") as handle:
+            source = extract_text(handle, doc.content_type)
+        chunks = list(Chunk.objects.filter(document=doc).order_by("index"))
+        assert len(chunks) > 1  # genuinely multi-chunk, so fidelity is under real pressure
+        for chunk in chunks:
+            assert chunk.text == source[chunk.start_offset : chunk.end_offset]  # verbatim slice
+            assert chunk.end_offset > chunk.start_offset
+
+
 def test_ingestion_marks_failed_on_unparseable_file():
     a = _tenant("acme")
     doc = _doc(a, body=b"%PDF not a real pdf", content_type="application/pdf", name="bad.pdf")
