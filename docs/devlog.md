@@ -178,3 +178,26 @@ at both the unit and ingestion levels. Existing chunks carry stale text + `(0,0)
 re-ingestion (the #13 retry endpoint) rewrites them; documented in an ADR-0003 addendum. Verified on
 real Postgres as `tenantiq_app` (118 passed, RLS live). Next in M3: #14/#48 (the query/streaming
 endpoint) and #15 (citations, which this unblocks).
+
+## 2026-07-12 — #23: the full stack actually runs via `docker compose up` + ADR-0006
+Closed the project's top devex defect. `make dev` claimed "the full stack," but compose started only
+db/redis/keycloak — no backend, no frontend, and critically **no Celery worker and no Ollama**, so
+the merged M2 ingestion pipeline couldn't run at all through compose. And nothing loaded `.env` into
+Django, so a dev who copied `.env.example` **silently ran SQLite with RLS absent** — the isolation
+guarantee quietly off.
+
+Dockerized the backend (one image, two commands: the `backend` service runs `runserver`, `worker`
+runs `celery -A config worker`) and the frontend, and added an `ollama` service with a one-shot
+`ollama-pull` sidecar that fetches the embedding model before the worker starts. A one-shot `migrate`
+service applies migrations once, as `tenantiq_app`, before anything else boots; healthchecks +
+`depends_on: service_completed_successfully` order the whole graph so nothing races an unmigrated
+schema or a missing model. Backend and worker share a `media` volume so the worker can read the file
+the API wrote. `.env` now takes effect two ways: python-dotenv loads the repo-root file for host runs
+(guarded off under pytest), while compose sets the infra hostnames (db/redis/ollama) explicitly and
+interpolates secrets/tunables from `.env` with safe defaults — so a missing file never breaks `up`.
+
+The proof is a `manage.py smoke_ingest` command (`make smoke`) that pushes a sample document through
+the real broker → worker → Ollama embedder and waits for READY. Recorded the decisions (Ollama as a
+service over host-Ollama; one image; a migrate one-shot; dotenv over env_file) in **ADR-0006**. The
+truthful README/docs rewrite is #56, next. Verified locally by building the images and running the
+composed stack end to end (migrations apply as `tenantiq_app`, RLS live).

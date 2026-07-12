@@ -1,3 +1,25 @@
+# Full local stack (#23): `docker compose up` brings up db + redis + ollama + the backend API +
+# the Celery ingestion worker + the frontend, so an uploaded document reaches READY through the
+# real worker and the real embedder. Keycloak stays behind the `dev` profile (auth is a separate
+# concern from the ingestion pipeline). `make dev` wraps this and seeds .env from .env.example.
+#
+# Env: infra hostnames are set explicitly per service (containers talk over the compose network,
+# not localhost), while tunables/secrets interpolate from the repo-root .env (compose auto-loads it)
+# with safe defaults — so a missing .env never breaks `up`. For host (non-compose) runs, the backend
+# also loads .env itself via python-dotenv (config/settings.py).
+
+x-backend-env: &backend-env
+  # The app connects as the NON-superuser role so RLS enforces (ADR-0002); `db` is the compose host.
+  DATABASE_URL: postgresql://tenantiq_app:tenantiq_app@db:5432/tenantiq
+  REDIS_URL: redis://redis:6379/0
+  OLLAMA_BASE_URL: http://ollama:11434
+  MEDIA_ROOT: /app/media
+  DJANGO_DEBUG: "true"
+  DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver,backend
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-change-me}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  TENANTIQ_EMBEDDING_MODEL: ${TENANTIQ_EMBEDDING_MODEL:-nomic-embed-text}
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -8,12 +30,99 @@ services:
     ports: ["5432:5432"]
     volumes:
       - "pgdata:/var/lib/postgresql/data"
-      # Creates the non-superuser tenantiq_app role on first init so RLS enforces (ADR-0002).
-      # Recreate the volume to re-run: docker compose down -v
+      # Creates the non-superuser tenantiq_app role + pgvector on first init so RLS enforces
+      # (ADR-0002/0004). Recreate the volume to re-run: docker compose down -v
       - "./infra/postgres/init:/docker-entrypoint-initdb.d:ro"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "tenantiq"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Local embedding backend (ADR-0004). The app's OllamaEmbedder calls /api/embed here.
+  ollama:
+    image: ollama/ollama
+    ports: ["11434:11434"]
+    volumes:
+      - "ollama:/root/.ollama"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # One-shot: pull the embedding model into the ollama volume, then exit. Everything that embeds
+  # waits for this to complete so the first ingestion doesn't race a missing model.
+  ollama-pull:
+    image: ollama/ollama
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${TENANTIQ_EMBEDDING_MODEL:-nomic-embed-text}"]
+    restart: "no"
+
+  # One-shot: apply migrations once (as tenantiq_app), before the API and worker start, so they
+  # never race an unmigrated schema.
+  migrate:
+    build: ./backend
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    environment: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build: ./backend
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    environment: *backend-env
+    volumes:
+      - "./backend:/app" # hot reload
+      - "media:/app/media" # shared with the worker so it can read uploaded files
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: ./backend
+    command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    environment: *backend-env
+    volumes:
+      - "./backend:/app"
+      - "media:/app/media" # reads the files the API wrote
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      ollama-pull:
+        condition: service_completed_successfully
+
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    volumes:
+      - "./frontend:/app"
+      - "/app/node_modules" # keep the image's install; don't shadow with the host's
+    ports: ["3000:3000"]
+
   # Dev-only identity provider. Start with: docker compose --profile dev up keycloak
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
@@ -23,5 +132,8 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
     ports: ["8080:8080"]
+
 volumes:
   pgdata:
+  ollama:
+  media:

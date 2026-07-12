@@ -12,8 +12,16 @@ import sys
 from pathlib import Path
 
 import dj_database_url
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load the repo-root .env for host (non-compose) runs, so a dev who copies .env.example actually
+# gets Postgres + RLS instead of silently falling back to SQLite (#23). override=False means a real
+# environment variable (what docker-compose injects per service) always wins over the file. Skipped
+# under pytest so the suite stays hermetic — tests set their own environment explicitly.
+if "pytest" not in sys.modules:
+    load_dotenv(BASE_DIR.parent / ".env")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
