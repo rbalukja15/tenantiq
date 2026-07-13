@@ -23,7 +23,8 @@ small enough for one engineer to ship and operate. The constraints that shaped t
   tenant ownership in the same scoped rows — no second system to keep isolated and in sync.
 - **Async: Celery + Redis.** Ingestion (parse → chunk → embed) is slow and must not block
   requests.
-- **Auth: Keycloak / Better Auth (OIDC).** Supports per-tenant identity providers.
+- **Auth: OIDC with per-tenant identity providers (Keycloak in dev).** The tenant is resolved only
+  from a verified token claim.
 - **LLM: Anthropic API with an Ollama fallback.** Quality by default; a local/cost lever.
 - **Scope for v1.0:** document Q&A with citations, multi-tenant isolation, an evaluation
   harness, and a live deployment. Out of scope: billing, org/role management beyond tenants,

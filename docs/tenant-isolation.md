@@ -51,7 +51,26 @@ Layer 1 carries isolation.
 
 ## How it's tested
 
-- `tests/test_scoped_manager.py` — Layer 1: scoping, raise-on-no-tenant, write guard (SQLite).
-- `tests/test_documents_api.py` — the guarantee at the HTTP edge + middleware cleanup.
-- `tests/test_rls.py` — Layer 2: raw-SQL reads/writes blocked across tenants; **skipped off
-  Postgres**. CI runs the whole suite against pgvector Postgres as `tenantiq_app`.
+Isolation is proven by tests at every layer — a query path without a cross-tenant test is not done
+(the standing rule in `CLAUDE.md`).
+
+- **`tests/test_tenant_isolation.py` — the #9 adversarial proof.** Seeds two tenants and asserts A
+  can never reach B:
+  - **API, both directions** — A's token lists only A's documents; B's lists only B's.
+  - **Forged client input** — a request carrying `?tenant_id=<B>` is *ignored*; scope comes from the
+    verified `iss`, so client input can't widen it. An unauthenticated request gets 401.
+  - **ORM** — inside A's context, fetching B's row by its exact id returns nothing (and `.get()`
+    raises `DoesNotExist`).
+  - **RLS backstop (Postgres only)** — with the application filter **deliberately removed** (the
+    unscoped `all_objects` manager, then raw SQL), the database still returns only A's rows. Proves
+    Layer 2 stands alone when Layer 1 is bypassed.
+- `tests/test_authentication.py` / `tests/test_verifier.py` — the resolution seam (the one place a
+  bug would undermine *both* layers): a valid token maps to its tenant; missing, malformed, expired,
+  unknown-issuer, wrong-audience, bad-signature, and `alg:none` tokens are all rejected with 401.
+- `tests/test_scoped_manager.py` — Layer 1 in isolation: scoping, raise-on-no-tenant, write guard.
+- `tests/test_rls.py` — Layer 2 in isolation: raw-SQL reads/writes blocked across tenants.
+- `tests/test_documents_api.py` — the guarantee at the HTTP edge, plus context cleanup after the
+  response.
+
+The RLS tests are **skipped off Postgres**; CI runs the whole suite against pgvector Postgres as the
+non-superuser `tenantiq_app` role, so Layer 2 is exercised for real.
