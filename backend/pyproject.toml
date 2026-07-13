@@ -17,6 +17,7 @@ dependencies = [
     "anthropic>=0.40",
     "pyjwt[crypto]>=2.8",
     "dj-database-url>=2.1",
+    "python-dotenv>=1.0",
     "pypdf>=4",
 ]
 
