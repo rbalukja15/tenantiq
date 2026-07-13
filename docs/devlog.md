@@ -201,3 +201,20 @@ the real broker → worker → Ollama embedder and waits for READY. Recorded the
 service over host-Ollama; one image; a migrate one-shot; dotenv over env_file) in **ADR-0006**. The
 truthful README/docs rewrite is #56, next. Verified locally by building the images and running the
 composed stack end to end (migrations apply as `tenantiq_app`, RLS live).
+
+## 2026-07-13 — #56: docs truth pass
+The repo *is* the portfolio artifact, and the docs were both overselling and underselling. Walked
+every command and claim against `main`. Oversell, removed: `make eval` was advertised in the
+quickstart but the entrypoint raises `NotImplementedError` — now marked "lands in M5 (currently a
+stub)"; the `make dev` line predated #23 and is now true (and says so: db + redis + ollama + backend
++ worker + frontend). "Better Auth" appeared in three docs (README ×2, architecture, ADR-0001) but
+exists nowhere in code or ADRs — dropped for "OIDC / Keycloak," since the tenant is resolved only
+from a verified token claim. `architecture.md` called the middleware "the single enforcement point";
+corrected to the real design the devlog already recorded for #8 — activation at the **auth seam**
+plus **two independent layers** (scoped ORM manager + forced RLS). Undersell, fixed: the README now
+opens with a "why it's worth a look" block that reaches the dev log, the isolation design, and the
+ADR index in one click, and the roadmap shows M0–M2 done / M3 in progress. Backfilled the CHANGELOG
+(stale at M0) with M1, M2, and the M3/M6 work merged since, and rewrote `tenant-isolation.md`'s
+testing section around the #9 adversarial suite (both-direction API, forged `?tenant_id`, ORM-by-id,
+and the RLS backstop with the app filter deliberately removed). No code changed; the guardrail is
+that every surviving claim is checked against the code. Next: M3 proper — the query API + citations.
