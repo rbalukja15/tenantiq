@@ -136,3 +136,14 @@ TENANTIQ_EMBEDDER_FACTORY = os.environ.get(
         else "app.embeddings.build_default_embedder"
     ),
 )
+
+# RAG query engine — retrieval + prompt assembly (M3, #14). Tuned like the chunking knobs.
+# TOP_K: how many tenant-scoped chunks to retrieve as candidate context.
+# MIN_SIMILARITY: cosine similarity floor (1 - distance, in [-1, 1]); a candidate below it is
+# dropped rather than padding the prompt, and if nothing clears the bar the query returns
+# "no relevant context". Default 0.0 keeps anything at least orthogonal to the query; raise it once
+# M5's eval calibrates the floor against the real embedding model.
+TENANTIQ_RETRIEVAL_TOP_K = int(os.environ.get("TENANTIQ_RETRIEVAL_TOP_K", "5"))
+TENANTIQ_RETRIEVAL_MIN_SIMILARITY = float(
+    os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY", "0.0")
+)
