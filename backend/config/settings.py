@@ -147,3 +147,20 @@ TENANTIQ_RETRIEVAL_TOP_K = int(os.environ.get("TENANTIQ_RETRIEVAL_TOP_K", "5"))
 TENANTIQ_RETRIEVAL_MIN_SIMILARITY = float(
     os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY", "0.0")
 )
+
+# Grounded answer generation (M3, #15, ADR-0008). The LLM client is pluggable like the embedder: a
+# deterministic fake under pytest (no network/key), the Anthropic Messages API otherwise, with an
+# Ollama fallback when no key is set. Anthropic is the answer LLM; Ollama's model is a local chat model.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+TENANTIQ_LLM_MODEL = os.environ.get("TENANTIQ_LLM_MODEL", "claude-opus-4-8")
+TENANTIQ_LLM_MAX_TOKENS = int(os.environ.get("TENANTIQ_LLM_MAX_TOKENS", "1024"))
+TENANTIQ_LLM_OLLAMA_MODEL = os.environ.get("TENANTIQ_LLM_OLLAMA_MODEL", "llama3.1")
+TENANTIQ_LLM_TIMEOUT_SECONDS = int(os.environ.get("TENANTIQ_LLM_TIMEOUT_SECONDS", "60"))
+TENANTIQ_LLM_FACTORY = os.environ.get(
+    "TENANTIQ_LLM_FACTORY",
+    (
+        "app.generation.build_fake_llm"
+        if "pytest" in sys.modules
+        else "app.generation.build_default_llm"
+    ),
+)
