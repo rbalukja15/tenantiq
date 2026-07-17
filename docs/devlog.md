@@ -218,3 +218,23 @@ ADR index in one click, and the roadmap shows M0–M2 done / M3 in progress. Bac
 testing section around the #9 adversarial suite (both-direction API, forged `?tenant_id`, ORM-by-id,
 and the RLS backstop with the app filter deliberately removed). No code changed; the guardrail is
 that every surviving claim is checked against the code. Next: M3 proper — the query API + citations.
+
+## 2026-07-16 — M3 #14: grounded prompt assembly + retrieval threshold (ADR-0007)
+Started the RAG query engine. Retrieval itself shipped back in #12/#44, so #14 was the assembly
+seam: turn a question into a grounded prompt the LLM (#15) and the streaming endpoint (#48) can
+build on. New `app/rag.py::retrieve_context` retrieves the tenant's nearest chunks, keeps only those
+clearing a cosine-similarity floor, and returns an `AssembledContext` — a system prompt fixing the
+grounding contract (answer *only* from the numbered sources, cite every claim by `[n]`, never invent
+figures or citations, refuse when the sources don't answer), a user prompt listing the sources, and
+a tuple of `Source`s each carrying the real `chunk_id` + document + character offsets (#45) a
+citation resolves back to. The key design call, recorded in **ADR-0007**: the seam never calls the
+answer-generating LLM (`build_grounded_prompt` is split out *fully pure* so the prompt format is
+unit-testable with no DB; `retrieve_context` still embeds the query + hits pgvector), and retrieval
+**refuses rather than pads** — below the floor, `has_context` is false and the prompt asks the model
+to say it doesn't know, instead of grounding an answer in irrelevant chunks. `k` and the floor are settings
+(`TENANTIQ_RETRIEVAL_TOP_K`/`MIN_SIMILARITY`); the floor defaults to a conservative 0.0 until M5's
+eval calibrates it against the real embedding model. TDD throughout: the threshold tests seed
+explicit vectors (one identical to the query → similarity 1.0, one orthogonal → 0.0) so the
+keep/drop boundary is exact and never flaky, and a cross-tenant test proves a question can't be
+grounded in another tenant's chunks. Full suite green on Postgres as `tenantiq_app` (131 passed).
+Next: #15 — call the LLM against this prompt and enforce the citation schema.
