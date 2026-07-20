@@ -238,3 +238,25 @@ explicit vectors (one identical to the query → similarity 1.0, one orthogonal 
 keep/drop boundary is exact and never flaky, and a cross-tenant test proves a question can't be
 grounded in another tenant's chunks. Full suite green on Postgres as `tenantiq_app` (131 passed).
 Next: #15 — call the LLM against this prompt and enforce the citation schema.
+
+## 2026-07-17 — M3 #15: grounded generation + citation enforcement (ADR-0008)
+The answering half of the query engine. `app/generation.py::generate_answer` takes #14's
+`AssembledContext`, calls the LLM for a structured `{answer, citations}` result, and turns it into a
+`GroundedAnswer` whose citations are guaranteed real. The enforcement mechanism (ADR-0008): the model
+cites source **numbers** from the prompt (`[1]`, `[2]`), and I map each number back to the `Source` it
+was assigned in #14 — dropping any number that doesn't match. So a hallucinated `[99]` resolves to
+nothing rather than surfacing as a citation; the model literally can't cite a chunk it wasn't shown.
+Two design calls beyond that. First, the ADR decision the issue asked for: chunk PKs aren't stable
+across re-ingestion (the #13 retry deletes and recreates chunks), so a `Citation` carries the durable
+anchor a resolver (#51) can re-locate the span by — `(document_id, chunk_index, start/end offsets)`,
+faithful since #45 — alongside `chunk_id` as the current snapshot; I chose the anchor over making
+re-ingestion preserve PKs, so citations are robust without constraining ingestion. Second, no-context
+is a refusal that never calls the model — zero tokens spent when retrieval found nothing. The LLM is
+pluggable like the embedder: a deterministic `FakeLLM` under pytest (so the whole suite stays hermetic
+— no key, no network), `AnthropicLLM` (`claude-opus-4-8`, schema-enforced via `output_config.format`)
+otherwise, with an `OllamaLLM` fallback when no key is set. Generation makes no DB query — it operates
+on the already-retrieved context — so #14's tenant scoping is inherited and nothing holds a
+transaction open during the model call (the streaming transport + that transaction boundary are #48's
+to own). TDD throughout; the untrusted-JSON parse step is tested directly. Full suite green on
+Postgres as `tenantiq_app` (141 passed). Next in M3: #48 wraps retrieve → generate in the streaming
+`POST /api/query` endpoint.
