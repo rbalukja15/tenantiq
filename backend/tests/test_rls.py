@@ -86,3 +86,70 @@ def test_rls_rejects_writing_another_tenants_row():
                     "INSERT INTO app_document (title, created_at, tenant_id) VALUES (%s, now(), %s)",
                     ["x", str(b.id)],
                 )
+
+
+@requires_postgres
+def test_rls_rejects_updating_another_tenants_row():
+    # The USING clause hides B's row from A's session, so a raw UPDATE targeting it matches nothing.
+    a, b = make_tenant("acme"), make_tenant("globex")
+    with tenant_context(b):
+        doc = Document.objects.create(title="b-doc")
+    with tenant_context(a):  # GUC = acme
+        with connection.cursor() as cur:
+            cur.execute("UPDATE app_document SET title = 'hacked' WHERE id = %s", [str(doc.id)])
+            assert cur.rowcount == 0  # nothing updated — B's row is invisible to A
+    with tenant_context(b):
+        doc.refresh_from_db()
+        assert doc.title == "b-doc"  # untouched
+
+
+@requires_postgres
+def test_rls_rejects_deleting_another_tenants_row():
+    a, b = make_tenant("acme"), make_tenant("globex")
+    with tenant_context(b):
+        doc = Document.objects.create(title="b-doc")
+    with tenant_context(a):  # GUC = acme
+        with connection.cursor() as cur:
+            cur.execute("DELETE FROM app_document WHERE id = %s", [str(doc.id)])
+            assert cur.rowcount == 0  # nothing deleted — B's row is invisible to A
+    with tenant_context(b):
+        assert Document.objects.filter(id=doc.id).exists()  # still there
+
+
+@requires_postgres
+def test_every_tenant_owned_table_has_forced_rls():
+    """Meta-guard: every concrete ``TenantOwnedModel`` table must have RLS enabled + forced with the
+    tenant-isolation policy. A new tenant-owned table added without its RLS migration fails here — so
+    Layer 2 no longer depends on remembering a hand-written migration per table (#50)."""
+    from django.apps import apps
+
+    from app.models import TenantOwnedModel
+
+    tables = sorted(
+        model._meta.db_table
+        for model in apps.get_models()
+        if issubclass(model, TenantOwnedModel) and not model._meta.abstract
+    )
+    assert {"app_document", "app_chunk"} <= set(tables)  # not vacuous: the known tables are present
+
+    with connection.cursor() as cur:
+        for table in tables:
+            cur.execute(
+                "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = %s",
+                [table],
+            )
+            flags = cur.fetchone()
+            assert flags is not None, f"{table} missing from pg_class"
+            enabled, forced = flags
+            assert enabled, f"RLS is not ENABLED on {table} — add its RLS migration"
+            assert forced, f"RLS is not FORCED on {table} — the app role would bypass the policy"
+
+            cur.execute(
+                "SELECT qual, with_check FROM pg_policies WHERE tablename = %s AND policyname = %s",
+                [table, "tenant_isolation"],
+            )
+            policy = cur.fetchone()
+            assert policy is not None, f"no tenant_isolation policy on {table}"
+            qual, with_check = policy
+            for clause in (qual, with_check):
+                assert clause and "current_setting" in clause and "tenant_id" in clause

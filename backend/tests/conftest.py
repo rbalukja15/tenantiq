@@ -7,6 +7,7 @@ The verifier injected in tests trusts this key, so we exercise the real verifica
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Callable
 
@@ -17,6 +18,57 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 TEST_ISSUER = "https://keycloak.test/realms/acme"
 TEST_CLIENT_ID = "tenantiq-acme"
+
+
+# --- CI guard: the Postgres-only isolation proofs must never silently skip (#50) ------------------
+#
+# The flagship RLS proofs are marked `requires_postgres` and skip off Postgres. That is right locally
+# (SQLite has no RLS) but dangerous in CI: one env regression and "isolation is sacred" is unproven
+# while CI stays green. When TENANTIQ_REQUIRE_POSTGRES is set (the CI Postgres job sets it), fail the
+# run if the suite isn't on Postgres or any Postgres-only test was skipped.
+
+_skipped_postgres_tests: list[str] = []
+
+
+def _postgres_guard_enabled() -> bool:
+    return os.environ.get("TENANTIQ_REQUIRE_POSTGRES", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def pytest_runtest_logreport(report) -> None:
+    if not (report.skipped and report.when == "setup"):
+        return
+    longrepr = getattr(report, "longrepr", None)
+    reason = longrepr[2] if isinstance(longrepr, tuple) and len(longrepr) == 3 else ""
+    if "postgres" in reason.lower():
+        _skipped_postgres_tests.append(report.nodeid)
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+    if not _postgres_guard_enabled():
+        return
+    from django.db import connection
+
+    problems = []
+    if connection.vendor != "postgresql":
+        problems.append(f"the suite ran against '{connection.vendor}', not Postgres")
+    if _skipped_postgres_tests:
+        problems.append(
+            f"{len(_skipped_postgres_tests)} Postgres-only test(s) skipped "
+            f"({', '.join(_skipped_postgres_tests)})"
+        )
+    if problems:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(
+                "TENANTIQ_REQUIRE_POSTGRES: isolation proofs must run — " + "; ".join(problems),
+                red=True,
+            )
 
 
 @pytest.fixture(autouse=True)

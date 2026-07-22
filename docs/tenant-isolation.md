@@ -64,13 +64,22 @@ Isolation is proven by tests at every layer — a query path without a cross-ten
   - **RLS backstop (Postgres only)** — with the application filter **deliberately removed** (the
     unscoped `all_objects` manager, then raw SQL), the database still returns only A's rows. Proves
     Layer 2 stands alone when Layer 1 is bypassed.
+- `tests/test_query.py` — the streaming query path (#48): a tenant's question can never surface or
+  cite another tenant's chunks (proven with an answer that echoes its sources, so a leak would show).
 - `tests/test_authentication.py` / `tests/test_verifier.py` — the resolution seam (the one place a
   bug would undermine *both* layers): a valid token maps to its tenant; missing, malformed, expired,
-  unknown-issuer, wrong-audience, bad-signature, and `alg:none` tokens are all rejected with 401.
+  unknown-issuer, wrong-audience, bad-signature, and `alg:none` tokens are all rejected with 401 —
+  and a token for a **deactivated** tenant (`is_active=False`) is rejected too (offboarding).
 - `tests/test_scoped_manager.py` — Layer 1 in isolation: scoping, raise-on-no-tenant, write guard.
-- `tests/test_rls.py` — Layer 2 in isolation: raw-SQL reads/writes blocked across tenants.
+- `tests/test_rls.py` — Layer 2 in isolation: raw SQL as the app role can't read, insert, **update,
+  or delete** across tenants. Includes a **meta-guard** that introspects `pg_class`/`pg_policies` and
+  asserts *every* concrete `TenantOwnedModel` table has RLS enabled + forced with the tenant-isolation
+  policy — so a new tenant-owned table added without its RLS migration fails CI (#50).
 - `tests/test_documents_api.py` — the guarantee at the HTTP edge, plus context cleanup after the
   response.
 
 The RLS tests are **skipped off Postgres**; CI runs the whole suite against pgvector Postgres as the
-non-superuser `tenantiq_app` role, so Layer 2 is exercised for real.
+non-superuser `tenantiq_app` role, so Layer 2 is exercised for real. A CI guard
+(`TENANTIQ_REQUIRE_POSTGRES`) **fails the job** if the suite isn't on Postgres or any of these
+Postgres-only proofs silently skips — so "isolation is sacred" can never go unproven while CI stays
+green (#50).
