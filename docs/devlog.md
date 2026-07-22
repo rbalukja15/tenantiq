@@ -260,3 +260,27 @@ transaction open during the model call (the streaming transport + that transacti
 to own). TDD throughout; the untrusted-JSON parse step is tested directly. Full suite green on
 Postgres as `tenantiq_app` (141 passed). Next in M3: #48 wraps retrieve → generate in the streaming
 `POST /api/query` endpoint.
+
+## 2026-07-20 — M3 #48: streaming query API (`POST /api/query`) + ADR-0009
+Tied the query engine together: `retrieve_context` (#14) → grounded generation (#15) → an
+authenticated, tenant-scoped, token-by-token streamed answer that closes with citations. Three real
+design calls, in **ADR-0009**. (1) **Transaction boundary.** `ATOMIC_REQUESTS` wraps the request, and
+a streaming LLM call inside it would pin a DB connection + the RLS GUC open for the whole stream. So
+retrieval runs *eager in the view* (inside the tenant transaction), and the `StreamingHttpResponse`
+body is produced *after* the view returns and the transaction commits — generation issues no query at
+all. A test pins this by asserting **zero queries** run while the body streams. (2) **The
+streaming-vs-structured-citations tension.** #15 enforces citations via structured output, which only
+exists at end-of-generation — incompatible with streaming from the first token. Resolution: stream the
+model's *prose* (which already carries `[n]` markers, per ADR-0007's citing prompt), then at stream
+end parse the markers and run them through the *same #15 resolver* — so a `[99]` still resolves to
+nothing and a citation still can't be invented, while the answer streams live. #15's structured
+non-streaming path stays for the eval harness. (3) **Transport:** SSE frames (`token` deltas →
+terminal `citations` → `error`) over `StreamingHttpResponse`; the client uses `fetch` +
+`ReadableStream` because native `EventSource` can't send the `Authorization` header. The no-context
+refusal reuses the same frame shape (refusal tokens + empty citations). TDD throughout: hermetic
+protocol tests (happy / refuse / mid-stream-failure, injecting fake streaming LLMs) plus Postgres
+endpoint tests — streamed citations resolve to real chunk IDs, the zero-queries-during-generation
+proof, and a cross-tenant test that a tenant's query can never surface or cite another tenant's
+chunks (the standing rule for a new query path). Full suite green on Postgres as `tenantiq_app`
+(151 passed). This closes the core M3 loop end to end; #51 (citation-resolution endpoint) and the M4
+UI (#19) build on the stream.

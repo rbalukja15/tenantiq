@@ -24,6 +24,9 @@ DB query — it operates on the already-retrieved ``AssembledContext`` — so th
 from __future__ import annotations
 
 import json
+import logging
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol
 from urllib import request as _urlrequest
@@ -32,6 +35,8 @@ from django.conf import settings
 from django.utils.module_loading import import_string
 
 from app.rag import AssembledContext, Source
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -67,11 +72,37 @@ class GroundedAnswer:
     refused: bool
 
 
+@dataclass(frozen=True)
+class TokenEvent:
+    """A streamed chunk of the answer text (#48)."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class CitationsEvent:
+    """The terminal event of a stream: the citations resolved from the answer's ``[n]`` markers."""
+
+    citations: tuple[Citation, ...]
+
+
+@dataclass(frozen=True)
+class ErrorEvent:
+    """Emitted when generation fails mid-stream (#48)."""
+
+    message: str
+
+
 class LLMClient(Protocol):
-    """Generate a structured answer from a grounded prompt. Implementations must not add context —
-    the prompt already carries the sources — and must return source *numbers*, not chunk IDs."""
+    """Generate an answer from a grounded prompt. Implementations must not add context — the prompt
+    already carries the sources — and must cite by source *number*, not chunk ID.
+
+    ``generate`` returns a complete structured result (#15); ``stream`` yields the answer text
+    incrementally for the streaming endpoint (#48), citing inline as ``[n]`` markers."""
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult: ...
+
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]: ...
 
 
 _REFUSAL_TEXT = "I don't have relevant information in your documents to answer that question."
@@ -90,6 +121,44 @@ def generate_answer(context: AssembledContext, *, llm: LLMClient | None = None) 
     result = llm.generate(context.system_prompt, context.user_prompt)
     citations = _resolve_citations(context.sources, result.citations)
     return GroundedAnswer(text=result.answer, citations=citations, refused=False)
+
+
+_CITATION_MARKER = re.compile(r"\[(\d+)\]")
+
+
+def _extract_citation_numbers(text: str) -> tuple[int, ...]:
+    """Pull the ``[n]`` citation markers out of the answer prose, in order of appearance."""
+    return tuple(int(match) for match in _CITATION_MARKER.findall(text))
+
+
+def stream_grounded_answer(
+    context: AssembledContext, *, llm: LLMClient | None = None
+) -> Iterator[TokenEvent | CitationsEvent | ErrorEvent]:
+    """Stream a grounded answer as events: token deltas, then a terminal citations event (#48).
+
+    The citations are resolved from the ``[n]`` markers the model wrote into the prose — mapped back
+    to the retrieved sources and filtered to the ones that resolve (the #15 enforcement). No context
+    refuses without calling the model; a mid-stream failure ends the stream with an error event
+    instead of a (misleading) citations event.
+    """
+    if not context.has_context:
+        yield TokenEvent(text=_REFUSAL_TEXT)
+        yield CitationsEvent(citations=())
+        return
+
+    llm = llm if llm is not None else get_llm()
+    chunks: list[str] = []
+    try:
+        for delta in llm.stream(context.system_prompt, context.user_prompt):
+            chunks.append(delta)
+            yield TokenEvent(text=delta)
+    except Exception:  # noqa: BLE001 — any backend failure becomes a clean error event
+        logger.exception("answer generation failed mid-stream")
+        yield ErrorEvent(message="Answer generation failed. Please try again.")
+        return
+
+    numbers = _extract_citation_numbers("".join(chunks))
+    yield CitationsEvent(citations=_resolve_citations(context.sources, numbers))
 
 
 def _resolve_citations(
@@ -172,6 +241,11 @@ class FakeLLM:
             citations=(1,) if cite_first else (),
         )
 
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:  # noqa: ARG002
+        cite_first = " [1]" if "[1]" in user_prompt else ""
+        yield "Based on your documents, "
+        yield f"here is the answer.{cite_first}"
+
 
 class AnthropicLLM:
     """Anthropic Messages API with schema-enforced structured output (see the claude-api reference).
@@ -197,6 +271,20 @@ class AnthropicLLM:
         )
         text = next((b.text for b in response.content if b.type == "text"), "{}")
         return _coerce_result(json.loads(text))
+
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        import anthropic
+
+        client = anthropic.Anthropic()
+        # Stream prose (with inline [n] markers) rather than structured output — the endpoint (#48)
+        # resolves citations from the markers once the text is complete.
+        with client.messages.stream(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        ) as stream:
+            yield from stream.text_stream
 
 
 class OllamaLLM:
@@ -227,6 +315,35 @@ class OllamaLLM:
         with _urlrequest.urlopen(req, timeout=settings.TENANTIQ_LLM_TIMEOUT_SECONDS) as resp:
             body = json.loads(resp.read())
         return _coerce_result(json.loads(body["message"]["content"]))
+
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "stream": True,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            }
+        ).encode()
+        req = _urlrequest.Request(
+            f"{self.base_url}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        # Ollama streams NDJSON: one JSON object per line, each carrying a message-content delta.
+        with _urlrequest.urlopen(req, timeout=settings.TENANTIQ_LLM_TIMEOUT_SECONDS) as resp:
+            for line in resp:
+                line = line.strip()
+                if not line:
+                    continue
+                chunk = json.loads(line)
+                piece = chunk.get("message", {}).get("content", "")
+                if piece:
+                    yield piece
+                if chunk.get("done"):
+                    break
 
 
 def build_fake_llm() -> LLMClient:
