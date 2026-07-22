@@ -302,3 +302,25 @@ env regression and the invariant is unproven while CI is green). A conftest hook
 or any Postgres-only test skipped; verified it trips on SQLite (exit 1) and passes on Postgres (exit
 0). Also updated `tenant-isolation.md`'s testing section. Mostly tests + one CI hook, no schema
 change; full suite green on Postgres as `tenantiq_app` with the guard active (156 passed).
+
+## 2026-07-22 — M3 #47: bound ingestion work + sanitize user-facing errors
+Two hardening gaps on the ingestion path, both attacker-relevant. **Bounds:** `pypdf` extraction had
+no page/size/time limits, so a crafted PDF could monopolize the shared worker — and
+`autoretry_for=(Exception,)` amplified the cost 4×. Now the Celery task carries `soft_time_limit`/
+`time_limit`, and a soft-limit hit is handled as a **permanent** failure (run_ingestion catches
+`SoftTimeLimitExceeded` like a ParseError; the task also catches it in the thin outer window) so it
+never re-queues. `parsing.py` caps the PDF page count and the extracted-text size (both configurable);
+exceeding either is a permanent `ParseError`. **Error leakage:** `mark_ingestion_failed` and the
+permanent-failure path stored the raw `str(exc)` in `Document.error`, which the API serves verbatim —
+leaking hostnames, DSNs, and internal paths to tenants. Now a single `_user_safe_message` maps every
+failure to a sanitized message (ParseError messages are authored in `parsing.py`, so they pass
+through; a timeout gets a "took too long" message; everything else collapses to a generic reason),
+while the raw exception goes only to the server log with the document/tenant ids. The signature of
+`mark_ingestion_failed` changed to take the exception (not a pre-stringified message) so it can
+categorize + log. Tests: oversized/too-many-pages input fails permanently with a safe message; a
+soft-limit hit is permanent with no retry (attempts stays 1); a raw DSN-bearing exception never
+reaches `Document.error` (asserted both at the unit level and end-to-end over `GET /api/documents`),
+but IS present in the server log. Several existing tests that asserted the *leaky* behaviour (raw
+text in `.error`) were flipped to assert sanitization. No schema change; full suite green on Postgres
+as `tenantiq_app` with the CI guard active (161 passed). (A pre-existing #44 HNSW recall test flaked
+once during the run and passed on re-run — flagged separately, unrelated to this change.)

@@ -276,11 +276,39 @@ def test_ingestion_fails_permanently_on_wrong_dimension(monkeypatch):
     with tenant_context(a):
         doc.refresh_from_db()
         assert doc.status == Document.Status.FAILED
-        assert "TENANTIQ_EMBEDDING_DIM" in doc.error  # the reason names the actual problem
+        # The surfaced reason is sanitized (#47): it must NOT leak internal config like the embedding
+        # dimension setting or the model name — that goes to the server log only.
+        assert doc.error and "TENANTIQ_EMBEDDING_DIM" not in doc.error
         assert Chunk.objects.filter(document=doc).count() == 0
 
 
-def test_mark_ingestion_failed_records_terminal_error():
+def test_ingestion_fails_permanently_on_soft_time_limit(monkeypatch):
+    # A soft time-limit hit means the work outran its budget on the shared worker: fail permanently
+    # with a safe message and NO retry amplification (#47) — run_ingestion returns without raising,
+    # so Celery's autoretry_for never fires.
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    a = _tenant("acme")
+    doc = _doc(a, body=b"some text to ingest")
+
+    def _timeout(*args, **kwargs):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr("app.ingestion.extract_text", _timeout)
+
+    run_ingestion(doc.id, a.id)  # permanent -> recorded, does not raise
+
+    with tenant_context(a):
+        doc.refresh_from_db()
+        assert doc.status == Document.Status.FAILED
+        assert doc.attempts == 1  # not retried
+        assert "too long" in doc.error.lower()  # the safe timeout message, not a raw traceback
+        assert Chunk.objects.filter(document=doc).count() == 0
+
+
+def test_mark_ingestion_failed_sanitizes_the_surfaced_reason(caplog):
+    # A terminal transient failure must surface a *safe* message to the tenant — the raw exception
+    # (which can carry hostnames, DSNs, internal paths) goes only to the server log (#47).
     from app.ingestion import mark_ingestion_failed
 
     a = _tenant("acme")
@@ -289,12 +317,21 @@ def test_mark_ingestion_failed_records_terminal_error():
         doc.status = Document.Status.PROCESSING
         doc.save(update_fields=["status"])
 
-    mark_ingestion_failed(doc.id, a.id, "embedding backend unreachable after 3 retries")
+    raw = (
+        "OSError: connect to postgres://svc:s3cr3t@db.internal:5432 failed at /opt/app/worker.py:88"
+    )
+    with caplog.at_level("ERROR"):
+        mark_ingestion_failed(doc.id, a.id, RuntimeError(raw))
 
     with tenant_context(a):
         doc.refresh_from_db()
         assert doc.status == Document.Status.FAILED
-        assert "unreachable" in doc.error
+        assert doc.error == "The document could not be processed. Please try again later."
+        # None of the raw internals leak into the tenant-facing reason...
+        for secret in ("postgres://", "s3cr3t", "db.internal", "/opt/app", "OSError"):
+            assert secret not in doc.error
+    # ...but the raw exception IS logged server-side for operators.
+    assert any("s3cr3t" in record.getMessage() for record in caplog.records)
 
 
 def test_mark_ingestion_failed_never_overwrites_a_ready_document():
@@ -308,7 +345,7 @@ def test_mark_ingestion_failed_never_overwrites_a_ready_document():
         doc.status = Document.Status.READY
         doc.save(update_fields=["status"])
 
-    mark_ingestion_failed(doc.id, a.id, "stale failure from a duplicate task")
+    mark_ingestion_failed(doc.id, a.id, RuntimeError("stale failure from a duplicate task"))
 
     with tenant_context(a):
         doc.refresh_from_db()

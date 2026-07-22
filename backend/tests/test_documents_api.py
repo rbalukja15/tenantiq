@@ -89,3 +89,24 @@ def test_list_surfaces_observability_fields(api, tenants, mint_token):
     assert doc["error"] == ""
     assert doc["attempts"] == 0
     assert "updated_at" in doc
+
+
+def test_failed_document_error_is_sanitized_over_the_api(api, tenants, mint_token):
+    # Acceptance (#47): a failure's raw exception text — hostnames, DSNs, internal paths — must never
+    # reach the client. The API serves whatever mark_ingestion_failed recorded, which is sanitized.
+    from app.ingestion import mark_ingestion_failed
+
+    acme, _ = tenants
+    with tenant_context(acme):
+        doc = Document.objects.get(title="acme-doc")
+    mark_ingestion_failed(
+        doc.id, acme.id, RuntimeError("boom at postgres://svc:s3cr3t@db.internal/tenantiq")
+    )
+
+    resp = api.get("/api/documents", **bearer(mint_token(sub="alice")))
+    assert resp.status_code == 200
+    served = resp.json()[0]
+    assert served["status"] == "failed"
+    assert served["error"] == "The document could not be processed. Please try again later."
+    for secret in ("s3cr3t", "postgres://", "db.internal"):
+        assert secret not in served["error"]

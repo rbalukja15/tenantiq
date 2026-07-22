@@ -7,6 +7,7 @@ never crashes the worker.
 
 from __future__ import annotations
 
+from django.conf import settings
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
@@ -15,7 +16,9 @@ PDF_TYPE = "application/pdf"
 
 
 class ParseError(Exception):
-    """Raised when a file cannot be parsed into text."""
+    """Raised when a file cannot be parsed into text. Its message is user-safe by construction — it
+    is authored here, never a raw library/exception string — so ingestion can surface it directly.
+    """
 
 
 def extract_text(file, content_type: str) -> str:
@@ -28,12 +31,35 @@ def extract_text(file, content_type: str) -> str:
 
 def _read_text(file) -> str:
     data = file.read()
-    return data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    max_chars = settings.TENANTIQ_MAX_EXTRACTED_CHARS
+    if len(text) > max_chars:
+        raise ParseError("The document is too large to process.")
+    return text
 
 
 def _read_pdf(file) -> str:
     try:
         reader = PdfReader(file)
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        page_count = len(reader.pages)
     except (PyPdfError, OSError, ValueError) as exc:
         raise ParseError("Could not read PDF.") from exc
+
+    if page_count > settings.TENANTIQ_MAX_PDF_PAGES:
+        # Bail on the page count *before* extracting — a many-thousand-page PDF must not run the
+        # extractor at all. Bounds are permanent failures; a retry would hit the same wall.
+        raise ParseError("The PDF has too many pages to process.")
+
+    max_chars = settings.TENANTIQ_MAX_EXTRACTED_CHARS
+    parts: list[str] = []
+    total = 0
+    try:
+        for page in reader.pages:
+            piece = page.extract_text() or ""
+            total += len(piece) + 1  # +1 for the joining newline
+            if total > max_chars:
+                raise ParseError("The document is too large to process.")
+            parts.append(piece)
+    except (PyPdfError, OSError, ValueError) as exc:
+        raise ParseError("Could not read PDF.") from exc
+    return "\n".join(parts)

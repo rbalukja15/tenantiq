@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.utils import timezone
 
@@ -30,6 +31,24 @@ logger = logging.getLogger(__name__)
 
 # Cap the surfaced reason so a stray traceback or huge parser message can't bloat the row.
 MAX_ERROR_LENGTH = 2000
+
+# A soft-limit hit means the work is too heavy for the shared worker — permanent, no retry (#47).
+PERMANENT_FAILURES = (ParseError, EmbeddingDimensionError, SoftTimeLimitExceeded)
+
+
+def _user_safe_message(exc: BaseException) -> str:
+    """Map an ingestion failure to a message safe to serve to a tenant (#47).
+
+    ``ParseError`` messages are authored in ``app.parsing`` and carry no internals, so they pass
+    through. Everything else — a timeout, an embedding-backend error, an unexpected exception —
+    collapses to a generic message; the raw exception (paths, hostnames, library internals) is only
+    ever written to the server log, never to ``Document.error``.
+    """
+    if isinstance(exc, ParseError):
+        return str(exc)
+    if isinstance(exc, SoftTimeLimitExceeded):
+        return "Processing took too long and was stopped. The document may be too large or complex."
+    return "The document could not be processed. Please try again later."
 
 
 def run_ingestion(document_id: int, tenant_id) -> None:
@@ -71,15 +90,16 @@ def run_ingestion(document_id: int, tenant_id) -> None:
                 [piece["text"] for piece in pieces],
                 settings.TENANTIQ_EMBED_BATCH_SIZE,
             )
-        except (ParseError, EmbeddingDimensionError) as exc:
-            # Permanent failures: an unreadable/empty file, or a static mis-configuration (a model
-            # whose vectors don't match TENANTIQ_EMBEDDING_DIM). Record the reason and stop — a
-            # retry would only hit the same error, so we don't burn the task's backoff on it.
+        except PERMANENT_FAILURES as exc:
+            # Permanent failures: an unreadable/empty/oversized file, a static mis-configuration (a
+            # model whose vectors don't match TENANTIQ_EMBEDDING_DIM), or a soft-limit hit (#47).
+            # A retry would only hit the same wall, so record the reason and stop. The tenant sees a
+            # sanitized message; the raw exception goes to the server log only.
             logger.warning(
-                "Ingestion failed for document %s (tenant %s): %s", document_id, tenant_id, exc
+                "Ingestion failed for document %s (tenant %s): %r", document_id, tenant_id, exc
             )
             doc.status = Document.Status.FAILED
-            doc.error = str(exc)[:MAX_ERROR_LENGTH]
+            doc.error = _user_safe_message(exc)[:MAX_ERROR_LENGTH]
             doc.save(update_fields=["status", "error", "updated_at"])
             return
 
@@ -110,20 +130,24 @@ def run_ingestion(document_id: int, tenant_id) -> None:
         doc.save(update_fields=["status", "updated_at"])
 
 
-def mark_ingestion_failed(document_id: int, tenant_id, error: str) -> None:
-    """Record a *terminal* ingestion failure so it is observable (issue #13).
+def mark_ingestion_failed(document_id: int, tenant_id, exc: BaseException) -> None:
+    """Record a *terminal* ingestion failure so it is observable (issue #13), with the raw exception
+    logged server-side and only a sanitized message surfaced to the tenant (#47).
 
     Called from the task's ``on_failure`` hook once retries are exhausted, so a transient outage
-    that never recovers becomes a FAILED document with a reason rather than one wedged in
+    that never recovers becomes a FAILED document with a *safe* reason rather than one wedged in
     PROCESSING forever. Runs inside the tenant's context because ``Document`` is tenant-owned.
 
     A conditional update (never touching a READY document) keeps a late or duplicate failing task
     from stomping a document that has since succeeded; it also no-ops harmlessly if the row is gone.
     """
+    logger.error(
+        "Terminal ingestion failure for document %s (tenant %s): %r", document_id, tenant_id, exc
+    )
     tenant = Tenant.objects.get(id=tenant_id)
     with tenant_context(tenant):
         Document.objects.filter(id=document_id).exclude(status=Document.Status.READY).update(
             status=Document.Status.FAILED,
-            error=(error or "Ingestion failed.")[:MAX_ERROR_LENGTH],
+            error=_user_safe_message(exc)[:MAX_ERROR_LENGTH],
             updated_at=timezone.now(),
         )
