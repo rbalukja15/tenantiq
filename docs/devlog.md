@@ -284,3 +284,21 @@ proof, and a cross-tenant test that a tenant's query can never surface or cite a
 chunks (the standing rule for a new query path). Full suite green on Postgres as `tenantiq_app`
 (151 passed). This closes the core M3 loop end to end; #51 (citation-resolution endpoint) and the M4
 UI (#19) build on the stream.
+
+## 2026-07-22 — M3 #50: close the isolation-proof gaps
+Hardened the sacred invariant now that the query path adds new surface. Four gaps closed. (1) A
+**meta-guard** (`test_rls.py`) enumerates every concrete `TenantOwnedModel` via the app registry and
+introspects `pg_class`/`pg_policies` to assert each table has RLS *enabled + forced* with the
+`tenant_isolation` policy — so Layer 2 no longer depends on remembering a hand-written migration per
+table: a new tenant-owned table without its RLS migration now fails CI. (2) The adversarial raw-SQL
+proof grew **UPDATE and DELETE** cases (it previously covered only SELECT + INSERT/`WITH CHECK`) — as
+the app role in tenant A's session, a raw `UPDATE`/`DELETE` targeting B's row matches zero rows
+because the `USING` clause hides it. (3) A **deactivation** test: the check already existed
+(`tenant_for_issuer` filters `is_active=True`, so the verifier sees "no active tenant" → 401), but
+nothing proved offboarding — now a valid IdP token for a deactivated tenant is rejected. (4) A **CI
+skip-guard**: the eight Postgres-only proofs skip off Postgres (right locally, dangerous in CI — one
+env regression and the invariant is unproven while CI is green). A conftest hook keyed on
+`TENANTIQ_REQUIRE_POSTGRES` (set in the CI Postgres job) fails the run if the suite isn't on Postgres
+or any Postgres-only test skipped; verified it trips on SQLite (exit 1) and passes on Postgres (exit
+0). Also updated `tenant-isolation.md`'s testing section. Mostly tests + one CI hook, no schema
+change; full suite green on Postgres as `tenantiq_app` with the guard active (156 passed).

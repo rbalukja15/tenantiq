@@ -29,6 +29,9 @@ jobs:
       # Connect as the non-superuser role so RLS is genuinely exercised in CI (ADR-0002); the
       # role is created by the "Create non-superuser app role" step below.
       DATABASE_URL: postgres://tenantiq_app:tenantiq_app@localhost:5432/tenantiq
+      # Fail the job if the Postgres-only isolation proofs ever silently skip (#50): a misconfigured
+      # DB backend or a skipped RLS test can't leave "isolation is sacred" unproven while CI is green.
+      TENANTIQ_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

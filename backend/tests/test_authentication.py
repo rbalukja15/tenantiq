@@ -73,6 +73,20 @@ def test_unknown_tenant_returns_401(api, mint_token):
     assert resp.status_code == 401
 
 
+def test_deactivated_tenant_token_is_rejected(api, mint_token):
+    # Offboarding: once a tenant is deactivated (is_active=False), a still-valid IdP token for it must
+    # no longer authenticate — the issuer resolves to no active tenant (app.auth.tenancy), so 401.
+    Tenant.objects.create(
+        slug="gone",
+        name="Gone",
+        oidc_issuer=GLOBEX_ISSUER,
+        oidc_client_id=GLOBEX_CLIENT,
+        is_active=False,
+    )
+    token = mint_token(issuer=GLOBEX_ISSUER, audience=GLOBEX_CLIENT, sub="bob")
+    assert api.get("/api/me", **bearer(token)).status_code == 401
+
+
 def test_membership_created_once(api, tenant_acme, mint_token):
     token = mint_token(sub="bob")
     api.get("/api/me", **bearer(token))
