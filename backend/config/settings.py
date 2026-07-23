@@ -116,6 +116,16 @@ CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_UR
 CELERY_TASK_ALWAYS_EAGER = _env_bool("CELERY_TASK_ALWAYS_EAGER", "pytest" in sys.modules)
 CELERY_TASK_EAGER_PROPAGATES = True
 
+# Bound ingestion work (#47) so a crafted/pathological upload can't monopolize the shared worker.
+# The Celery soft limit raises inside the task and is handled as a *permanent* failure (no retry
+# amplification); the hard limit (soft + a small grace) SIGKILLs a task that ignores the soft raise.
+TENANTIQ_INGEST_SOFT_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_SOFT_TIME_LIMIT", "240"))
+TENANTIQ_INGEST_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_TIME_LIMIT", "300"))
+# Parsing bounds (#47): reject an oversized document before it burns CPU/memory. Exceeding either is
+# a permanent ParseError. Defaults are generous — real documents, not adversarial ones, drive them.
+TENANTIQ_MAX_PDF_PAGES = int(os.environ.get("TENANTIQ_MAX_PDF_PAGES", "2000"))
+TENANTIQ_MAX_EXTRACTED_CHARS = int(os.environ.get("TENANTIQ_MAX_EXTRACTED_CHARS", str(10_000_000)))
+
 # Chunking strategy (ADR-0003). Tunable; sized by a chars-per-token estimate until #12's tokenizer.
 TENANTIQ_CHUNK_TARGET_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_TARGET_TOKENS", "800"))
 TENANTIQ_CHUNK_OVERLAP_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_OVERLAP_TOKENS", "100"))

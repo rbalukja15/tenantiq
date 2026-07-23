@@ -64,10 +64,12 @@ def test_on_failure_marks_document_failed_and_records_reason():
     with tenant_context(a):
         doc = Document.objects.create(title="notes.txt", status=Document.Status.PROCESSING)
 
-    exc = RuntimeError("embedding backend unreachable")
+    exc = RuntimeError("embedding backend unreachable at redis://cache.internal:6379")
     ingest_document.on_failure(exc, "task-id-123", [doc.id, a.id], {}, None)
 
     with tenant_context(a):
         doc.refresh_from_db()
         assert doc.status == Document.Status.FAILED
-        assert "unreachable" in doc.error
+        # The reason is surfaced but sanitized (#47) — raw internals never reach the tenant.
+        assert doc.error == "The document could not be processed. Please try again later."
+        assert "unreachable" not in doc.error and "cache.internal" not in doc.error

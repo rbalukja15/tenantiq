@@ -9,6 +9,8 @@ the terminal failure on the document so it never sits silently stuck in PROCESSI
 from __future__ import annotations
 
 from celery import Task, shared_task
+from celery.exceptions import SoftTimeLimitExceeded
+from django.conf import settings
 
 from app.ingestion import mark_ingestion_failed, run_ingestion
 
@@ -18,12 +20,13 @@ class IngestTask(Task):
 
     ``on_failure`` fires only once the task has given up (retries exhausted or a non-retryable
     error) — never on an intermediate retry — so a transient outage that eventually fails for good
-    becomes an observable FAILED document with a reason instead of one wedged in PROCESSING.
+    becomes an observable FAILED document with a reason instead of one wedged in PROCESSING. It
+    passes the exception (not its raw text) so the reason is sanitized before it reaches the tenant.
     """
 
     def on_failure(self, exc, task_id, args, kwargs, einfo) -> None:
         document_id, tenant_id = args[0], args[1]
-        mark_ingestion_failed(document_id, tenant_id, str(exc))
+        mark_ingestion_failed(document_id, tenant_id, exc)
 
 
 @shared_task(
@@ -33,6 +36,18 @@ class IngestTask(Task):
     autoretry_for=(Exception,),
     retry_backoff=True,
     max_retries=3,
+    # Bound the work so a crafted upload can't monopolize the shared worker (#47). The soft limit
+    # raises SoftTimeLimitExceeded *inside* the task (handled below as permanent); the hard limit
+    # SIGKILLs a task that ignores the soft raise.
+    soft_time_limit=settings.TENANTIQ_INGEST_SOFT_TIME_LIMIT,
+    time_limit=settings.TENANTIQ_INGEST_TIME_LIMIT,
 )
 def ingest_document(self, document_id, tenant_id) -> None:
-    run_ingestion(document_id, tenant_id)
+    try:
+        run_ingestion(document_id, tenant_id)
+    except SoftTimeLimitExceeded as exc:
+        # A soft-limit hit is a *permanent* failure — retrying (autoretry_for) would just burn the
+        # worker again and amplify the cost 4x. Record it terminally instead of re-raising, so the
+        # task does not retry. (run_ingestion also handles a soft-limit hit inside its own work; this
+        # covers a hit in the thin window outside that block.)
+        mark_ingestion_failed(document_id, tenant_id, exc)
