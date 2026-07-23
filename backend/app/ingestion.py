@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from app.chunking import chunk_text
 from app.embeddings import EmbeddingDimensionError, embed_in_batches, get_embedder
+from app.guardrails import redact_pii
 from app.models import Chunk, Document, Tenant
 from app.parsing import ParseError, extract_text
 from app.tenant_context import tenant_context
@@ -73,6 +74,11 @@ def run_ingestion(document_id: int, tenant_id) -> None:
         try:
             with doc.file.open("rb") as handle:
                 text = extract_text(handle, doc.content_type)
+            # Redact PII on the extracted text *before* chunking (#16): recognizable personal data
+            # never reaches a stored chunk, the vector index, or an answer, and because it runs before
+            # chunking the offsets stay faithful (#45) — chunks slice the redacted text.
+            if settings.TENANTIQ_REDACT_PII:
+                text = redact_pii(text)
             pieces = chunk_text(
                 text,
                 target_tokens=settings.TENANTIQ_CHUNK_TARGET_TOKENS,
