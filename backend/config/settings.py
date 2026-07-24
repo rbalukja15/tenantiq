@@ -87,7 +87,44 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
     ],
+    # Per-tenant burst limits (#49, ADR-0011). The throttle classes (app.throttling) key the bucket
+    # on the tenant, not the user — a tenant's whole workforce shares one budget and can never touch
+    # another tenant's. Scopes: query (LLM-backed, expensive) < uploads < reads. Env-overridable so
+    # limits are configuration, not code; the query endpoint must be bounded before any public deploy
+    # (#25). None disables a scope.
+    "DEFAULT_THROTTLE_RATES": {
+        "query": os.environ.get("TENANTIQ_THROTTLE_QUERY", "30/min"),
+        "upload": os.environ.get("TENANTIQ_THROTTLE_UPLOAD", "20/min"),
+        "read": os.environ.get("TENANTIQ_THROTTLE_READ", "120/min"),
+    },
 }
+
+# Per-tenant query *volume* quotas (#49, ADR-0011) — the counting half of the quota hooks, over a
+# fixed calendar window. Distinct from the per-minute burst rates above: these cap total query
+# requests per tenant per day/month, the guardrail against sustained LLM spend before #17's precise
+# cost accounting lands. 0 = unlimited (the hook is present but disabled). Env-overridable.
+TENANTIQ_QUERY_DAILY_QUOTA = int(os.environ.get("TENANTIQ_QUERY_DAILY_QUOTA", "1000"))
+TENANTIQ_QUERY_MONTHLY_QUOTA = int(os.environ.get("TENANTIQ_QUERY_MONTHLY_QUOTA", "0"))
+
+# Cache backend. Throttle/quota counters must be *shared* across worker processes to be correct, so
+# production points the default cache at Redis (reusing REDIS_URL). Under pytest we use a local
+# in-memory cache so the suite stays hermetic and each test starts from a clean slate (the autouse
+# cache-clear fixture in conftest); a dev box without a cache URL also falls back to local memory
+# (single process, still correct there).
+_CACHE_URL = os.environ.get(
+    "CACHE_URL",
+    "" if "pytest" in sys.modules else os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+)
+if _CACHE_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _CACHE_URL,
+            "KEY_PREFIX": "tenantiq",
+        }
+    }
+else:
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
 # Dotted path to a zero-arg callable returning a TokenVerifier. Tests override this to inject
 # a verifier backed by a local test key, so auth tests need no live Keycloak.
