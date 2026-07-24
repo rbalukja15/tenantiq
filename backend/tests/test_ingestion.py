@@ -370,3 +370,78 @@ def test_reingestion_is_idempotent():
         doc.refresh_from_db()
         assert doc.status == Document.Status.READY
         assert Chunk.objects.filter(document=doc).count() == first_count
+
+
+# --- PII redaction on ingest (#16) ----------------------------------------------------------------
+
+
+def test_ingestion_redacts_pii_before_storing_chunks():
+    # Recognizable PII must never land in a stored chunk (and so never in the vector index or an
+    # answer). Redaction runs on the extracted text before chunking.
+    a = _tenant("acme")
+    body = ("Contact Jane at jane.doe@example.com or call 415-555-0148. " * 40).encode()
+    doc = _doc(a, body=body)
+
+    run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        doc.refresh_from_db()
+        assert doc.status == Document.Status.READY
+        joined = " ".join(Chunk.objects.filter(document=doc).values_list("text", flat=True))
+
+    assert "jane.doe@example.com" not in joined
+    assert "415-555-0148" not in joined
+    assert "[REDACTED_EMAIL]" in joined
+    assert "[REDACTED_PHONE]" in joined
+
+
+def test_redacted_chunk_text_is_still_a_faithful_slice():
+    # Redaction runs before chunking, so #45 fidelity holds against the *redacted* source: each
+    # chunk's stored text is exactly its char span of redact_pii(source). This is the real guard —
+    # it would fail if redaction moved after chunking or offsets indexed the un-redacted text.
+    from app.guardrails import redact_pii
+
+    a = _tenant("acme")
+    raw = "Email a@b.com then write several more words to fill the chunk. " * 30
+    doc = _doc(a, body=raw.encode())
+    redacted_source = redact_pii(raw)
+
+    run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        chunks = list(Chunk.objects.filter(document=doc).order_by("index"))
+        assert chunks
+        for chunk in chunks:
+            assert chunk.text == redacted_source[chunk.start_offset : chunk.end_offset]
+        assert "a@b.com" not in " ".join(c.text for c in chunks)  # redaction actually happened
+
+
+def test_pii_redaction_can_be_disabled_via_settings(settings):
+    # An escape hatch for evaluation baselines (#21) that need the raw extracted text. Off by config.
+    settings.TENANTIQ_REDACT_PII = False
+    a = _tenant("acme")
+    body = ("Reach me at raw.pii@example.com any time you like. " * 40).encode()
+    doc = _doc(a, body=body)
+
+    run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        joined = " ".join(Chunk.objects.filter(document=doc).values_list("text", flat=True))
+
+    assert "raw.pii@example.com" in joined  # redaction disabled → raw text stored
+    assert "[REDACTED_EMAIL]" not in joined
+
+
+def test_ingestion_redacts_pii_split_across_a_page_join_newline():
+    # pypdf joins pages with "\n"; an SSN straddling a page break (review #16) must not survive into
+    # a stored chunk. Redaction runs on the whole extracted text before chunking, so it is caught.
+    a = _tenant("acme")
+    body = (("filler words to pad the document. " * 20) + "SSN 123-45-\n6789 tail.").encode()
+    doc = _doc(a, body=body)
+
+    run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        joined = " ".join(Chunk.objects.filter(document=doc).values_list("text", flat=True))
+    assert "123-45-6789" not in joined
+    assert "[REDACTED_SSN]" in joined

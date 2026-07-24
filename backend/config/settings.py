@@ -126,6 +126,13 @@ TENANTIQ_INGEST_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_TIME_LIMIT", "3
 TENANTIQ_MAX_PDF_PAGES = int(os.environ.get("TENANTIQ_MAX_PDF_PAGES", "2000"))
 TENANTIQ_MAX_EXTRACTED_CHARS = int(os.environ.get("TENANTIQ_MAX_EXTRACTED_CHARS", str(10_000_000)))
 
+# PII redaction (#16, ADR-0010). Redact recognizable personal data (email, phone, US SSN, Luhn-valid
+# payment card) from the extracted text *before* chunking, so it never lands in a stored chunk, the
+# vector index, or a generated answer. On by default; disable only for evaluation baselines (#21)
+# that need the raw extracted text. A re-ingestion (manage.py reingest_documents) applies it to
+# documents ingested before this landed.
+TENANTIQ_REDACT_PII = _env_bool("TENANTIQ_REDACT_PII", True)
+
 # Chunking strategy (ADR-0003). Tunable; sized by a chars-per-token estimate until #12's tokenizer.
 TENANTIQ_CHUNK_TARGET_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_TARGET_TOKENS", "800"))
 TENANTIQ_CHUNK_OVERLAP_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_OVERLAP_TOKENS", "100"))
