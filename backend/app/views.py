@@ -26,6 +26,12 @@ from app.models import Document
 from app.rag import retrieve_context
 from app.serializers import DocumentSerializer
 from app.tasks import ingest_document
+from app.throttling import (
+    QUERY_QUOTA_THROTTLES,
+    TenantQueryRateThrottle,
+    TenantReadRateThrottle,
+    TenantUploadRateThrottle,
+)
 
 
 class MeView(APIView):
@@ -35,6 +41,7 @@ class MeView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    throttle_classes = [TenantReadRateThrottle]
 
     def get(self, request: Request) -> Response:
         tenant = request.tenant
@@ -54,6 +61,14 @@ class DocumentListCreateView(generics.ListCreateAPIView):
 
     permission_classes = [IsAuthenticated]
     serializer_class = DocumentSerializer
+
+    def get_throttles(self):
+        # An upload (POST) enqueues worker load, so it is bounded by the tighter 'upload' budget; a
+        # listing (GET) is cheap and uses the 'read' budget. Same tenant, two separate scopes.
+        throttle = (
+            TenantUploadRateThrottle if self.request.method == "POST" else TenantReadRateThrottle
+        )
+        return [throttle()]
 
     def get_queryset(self):
         return Document.objects.order_by("created_at")
@@ -75,6 +90,7 @@ class DocumentRetryView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    throttle_classes = [TenantUploadRateThrottle]  # re-enqueues ingestion -> upload budget
 
     def post(self, request: Request, pk: int) -> Response:
         document = get_object_or_404(Document.objects, pk=pk)
@@ -131,6 +147,11 @@ class QueryView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    # The expensive path: a per-tenant burst rate plus daily/monthly volume quotas (#49). All are
+    # keyed on the tenant, so one tenant's spend can never eat into another's budget. The quota
+    # throttles only *gate* here; the request is *charged* against the quota below, once we know it
+    # is actually being served (a request 429'd by the rate throttle must not burn quota).
+    throttle_classes = [TenantQueryRateThrottle, *QUERY_QUOTA_THROTTLES]
     content_negotiation_class = _IgnoreClientContentNegotiation
 
     def post(self, request: Request) -> Response | StreamingHttpResponse:
@@ -140,6 +161,10 @@ class QueryView(APIView):
                 {"detail": "A non-empty 'question' is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # We have cleared every throttle gate and are about to serve: charge the query quota now, so
+        # only served requests draw it down (never a bad-request 400 or a rate-limited 429).
+        for quota in QUERY_QUOTA_THROTTLES:
+            quota().record(request)
         context = retrieve_context(question)  # tenant-scoped, inside the request transaction
         response = StreamingHttpResponse(
             (_sse_frame(event) for event in stream_grounded_answer(context)),

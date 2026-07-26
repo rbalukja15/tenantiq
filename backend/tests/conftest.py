@@ -81,6 +81,22 @@ def _isolate_tenant_context():
     clear_current_tenant()
 
 
+@pytest.fixture(autouse=True)
+def _reset_throttle_cache():
+    """Reset the throttle/quota cache between tests (#49).
+
+    Rate-limit and quota counters live in the process-global cache. Without a reset, request counts
+    would accumulate across tests in one process and a late test could spuriously hit a 429. Clearing
+    it per test keeps throttling inert for tests that don't exercise it, and deterministic for those
+    that do.
+    """
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+    cache.clear()
+
+
 @pytest.fixture(scope="session")
 def rsa_keys() -> tuple[bytes, bytes]:
     """(private_pem, public_pem) for RS256 signing/verification in tests."""

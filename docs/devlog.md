@@ -369,3 +369,55 @@ threats table where every mitigation names the test that proves it). Verified: f
 Postgres as `tenantiq_app` with the CI guard active (the #16 surface + all isolation proofs — 81
 tests — pass; 180/181 overall, the one failure being the pre-existing #44 HNSW recall flake, which is
 unrelated to this change and passes 3/3 in isolation). ruff + black clean; no schema change.
+
+## 2026-07-24 — M3 #49: per-tenant rate limiting + quotas (ADR-0011)
+
+There was no rate limiting or quota anywhere: an authenticated client could drive unbounded LLM spend
+through `POST /api/query`, and #25 will make the API publicly reachable. This had to exist before that.
+The design turns on one choice — the *unit* of limiting. Per-user would let a tenant with many users
+run up unbounded aggregate spend; per-IP is an edge concern. Per-**tenant** is the only unit that
+matches the isolation model and actually caps a customer's spend, so throttling extends the "isolation
+is sacred" invariant to capacity: one tenant's exhaustion can never consume another's budget.
+
+A new `app/throttling.py` provides two families, both keyed on `request.tenant.id`. **Burst**:
+`TenantQueryRateThrottle` / `…Upload…` / `…Read…` subclass DRF's `SimpleRateThrottle` re-keyed on the
+tenant, with three separate scopes (query < upload < read) whose rates are configuration
+(`REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]`, env-overridable; the base reads the rate fresh from
+`api_settings` since DRF binds `THROTTLE_RATES` at import and would otherwise ignore reconfiguration).
+**Volume**: `TenantQueryDailyQuotaThrottle` / `…Monthly…` count a tenant's total query requests in the
+current calendar day/month and deny past a configured cap (`TENANTIQ_QUERY_{DAILY,MONTHLY}_QUOTA`,
+`0` = unlimited hook), the guardrail against sustained spend before #17's precise accounting. A denied
+request is **429 with `Retry-After`** (DRF sets the header from each throttle's `wait()`). Views wire
+the scopes: `/api/query` gets the query rate + both quotas; documents POST → upload, GET → read;
+`/api/me` → read; retry → upload. The anon path is untouched — DRF rejects an unauthenticated request
+with 401 before throttles run, so unauthenticated-cost bounding is an edge/WAF concern deferred to #25.
+
+Throttle counters must be **shared across workers** to be correct (a per-process cache means N workers
+enforce N× the rate), so the default cache is Redis in production (`REDIS_URL`/`CACHE_URL`); under
+pytest and on a cache-less dev box it falls back to local memory, and an autouse fixture clears it
+between tests so counts can't leak.
+
+Acceptance criterion met on the real endpoint: `test_ratelimit_api.py::test_hammering_the_query_
+endpoint_throttles_the_tenant_but_not_another` — acme hammering `/api/query` is 429'd by its own
+budget while globex, hammering nothing, still gets 200. Hermetic unit tests
+(`test_throttling.py`) prove the mechanism (per-tenant keying, scope independence, quota isolation,
+`0`=unlimited, positive `Retry-After`). Docs: **ADR-0011** (the user/IP/tenant, burst/volume, and
+cache forks) and a new **T7** row in the threat model (mitigation → the test that proves it).
+
+The adversarial multi-agent review (parallel finders per dimension → refutation-biased skeptic per
+finding) surfaced two real defects and four coverage gaps, all fixed before the PR: (1) **quota
+charged rate-rejected requests** — DRF's `check_throttles` runs every throttle with no short-circuit,
+so a request 429'd by the burst rate still incremented the daily/monthly quota; a client retrying on
+429 could drain its own daily quota with zero-work requests and self-lock-out for the day. Fixed by
+splitting the quota into *gate* (`allow_request`, read-only) and *consume* (`record`), with the view
+charging only requests it actually serves; a white-box test asserts 5 rate-rejected queries leave the
+daily counter at the 3 served. (2) **A cache outage failed *closed* (500)** — Django's built-in
+`RedisCache` doesn't swallow backend errors, so a Redis blip would 500 every throttled endpoint,
+contradicting the ADR's fail-open claim; both throttle families now catch a cache-unavailable error
+and fail open, proved by a broken-cache backend test. The four gaps — no rate+quota interaction test,
+no monthly-quota HTTP test, no window-rollover/reset test, no retry-endpoint throttle test — are now
+covered.
+
+Verified: **211 passed** on real Postgres as `tenantiq_app` with the CI guard active (all
+Postgres-only tests ran, none skipped); **182 passed / 29 skipped** on SQLite. ruff + black clean;
+`makemigrations --check` clean; no schema change (throttle state is cache, not DB).

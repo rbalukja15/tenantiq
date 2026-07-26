@@ -27,6 +27,14 @@ dev = ["pytest>=8.0", "pytest-django>=4.8", "ruff>=0.6", "black>=24.0"]
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint]
+# Pin the ruleset explicitly to Ruff's historical default (pycodestyle errors + Pyflakes) instead of
+# relying on the moving default `select`: Ruff 0.16 broadened the built-in default, which would newly
+# flag ~80 findings across the existing codebase and break CI on a linter upgrade nobody chose. This
+# keeps lint deterministic across Ruff versions; adopting newer rule families (RUF/SIM/UP/…) is a
+# separate, intentional cleanup.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.black]
 line-length = 100
 
