@@ -275,8 +275,13 @@ def test_query_endpoint_requires_authentication():
 
 @requires_postgres
 def test_query_endpoint_holds_no_db_transaction_open_during_generation(configured_auth, mint_token):
-    # Acceptance: retrieval happens in the request; generation (streaming the body) must issue no
-    # further queries, so no DB transaction is held open while the model streams.
+    # Acceptance (ADR-0009): retrieval happens inside the request; the model call must not run with a
+    # DB transaction held open. So the streaming body issues **no retrieval work** — no document or
+    # chunk query, and nothing at all until the model has finished.
+    #
+    # Since #17 the body's tail writes exactly one usage-accounting row (a small INSERT *after* the
+    # last token, never during the model call), so the assertion names precisely what is allowed
+    # instead of counting to zero — a retrieval query appearing here would still fail.
     _seed(_tenant("acme"), ["Refund policy: returns accepted within fourteen days."])
     client = APIClient()
     response = client.post(
@@ -286,9 +291,22 @@ def test_query_endpoint_holds_no_db_transaction_open_during_generation(configure
         HTTP_AUTHORIZATION=f"Bearer {mint_token(sub='alice')}",
     )
     assert response.status_code == 200
-    with CaptureQueriesContext(connection) as captured:
-        _consume(response)  # drive the streaming body to completion
-    assert len(captured) == 0  # generation touched the database zero times
+    with CaptureQueriesContext(connection) as captured:  # noqa: F841 — forces query capture
+        baseline = len(connection.queries)
+        frames = 0
+        for _frame in response.streaming_content:
+            frames += 1
+            # While frames are still being produced, the database must be untouched — zero queries,
+            # exactly as before #17. The accounting write happens only once the generator is
+            # exhausted, i.e. after the last frame has been yielded.
+            assert len(connection.queries) == baseline, connection.queries[baseline:]
+        statements = [q["sql"].lower() for q in connection.queries[baseline:]]
+
+    assert frames > 0  # not vacuous: the body really did stream
+    # No retrieval during generation: the expensive tenant data is never touched while streaming.
+    assert not any("app_chunk" in sql or "app_document" in sql for sql in statements)
+    # Exactly one statement touches the usage table — one row per request, never per token (#17).
+    assert sum("app_usagerecord" in sql for sql in statements) == 1, statements
 
 
 @requires_postgres

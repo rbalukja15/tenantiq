@@ -421,3 +421,90 @@ covered.
 Verified: **211 passed** on real Postgres as `tenantiq_app` with the CI guard active (all
 Postgres-only tests ran, none skipped); **182 passed / 29 skipped** on SQLite. ruff + black clean;
 `makemigrations --check` clean; no schema change (throttle state is cache, not DB).
+
+A tooling aside from the same PR: CI installs ruff via a floating `ruff>=0.6`, and **ruff 0.16.0**
+broadened its built-in default `select`, newly flagging ~80 findings across the existing codebase and
+reddening the pipeline on a linter upgrade nobody chose. The lint rules are now pinned explicitly to
+ruff's historical default (`E4,E7,E9,F`) under `[tool.ruff.lint]`, so `ruff check` is deterministic
+across versions; adopting the newer rule families is a separate, intentional cleanup.
+
+## 2026-07-26 — M3 #17: per-tenant cost & token accounting (ADR-0012)
+
+#49 landed *limits* (per-tenant rates + daily/monthly query counts), but a request count is a poor
+proxy for spend — two queries can differ by an order of magnitude in tokens, and a count can't answer
+"what did Acme cost last month?" This closes that: **cost per tenant, queryable for any time range**.
+
+The interesting fork was **where token counts come from**. The answer path is streaming (ADR-0009):
+`LLMClient.stream` yields text deltas and exposes no provider usage payload, and the hermetic fake LLM
+has no usage concept at all. Rather than thread provider usage through every backend and the fake, #17
+**estimates** tokens from the text already in hand — the assembled prompt (input) and the accumulated
+answer (output) — reusing the chars-per-token heuristic from chunking (ADR-0003). That keeps the
+`LLMClient` protocol untouched and the whole path testable with no network or API key, at the cost of
+accuracy: these are estimates, labelled `estimated_*` in both the model and the API, and exact provider
+counts can later replace them without a schema or endpoint change.
+
+New `UsageRecord` (tenant-owned: `kind`, `model_name`, `input_tokens`, `output_tokens`,
+`estimated_cost_usd`, `created_at`, indexed on `(tenant, created_at)`) plus migration `0012` giving it
+the same **forced RLS** policy as documents and chunks — cost data leaks a tenant's query volume and
+behaviour, so it earns the same DB-level backstop (#50's meta-guard enumerates tenant-owned models, so
+it would have failed had the RLS migration been forgotten). **Money is `Decimal`, never float**
+(`decimal_places=6` for sub-cent precision), prices are configuration in USD per million tokens with
+input and output priced separately, and the API serializes cost as a **string** so a JSON float can't
+reintroduce the error the Decimal column exists to prevent. The price in effect at write time is baked
+into the row, so a later price change can't rewrite history.
+
+Recording lives in the **view's stream tail**, not in `app/generation.py` (which is deliberately
+DB-free): the view accumulates streamed text and writes one row in a `finally`. Consequences, all
+deliberate — the write lands *after* the last token so ADR-0009's "no transaction across the model
+call" holds; `record_query_usage` establishes tenant context itself, because the SSE body completes
+after `ATOMIC_REQUESTS` commits and the middleware has cleared the contextvar (a recorder assuming an
+ambient tenant would silently write nothing); `finally` means a client that disconnects mid-stream is
+still charged for tokens actually produced; and a refusal (no context → model never called) or a 400 is
+**not** charged at all. Accounting is also **best-effort by design**: by the time it runs the whole
+answer has been sent, so a failure (DB down, misconfigured price) is caught and logged rather than
+raised — losing a usage row beats corrupting a response the client already received in full, and a
+test pins that. #48's `..._holds_no_db_transaction_open_during_generation` acceptance test was
+*sharpened* rather than relaxed: instead of counting to zero it now asserts no `app_chunk`/`app_document`
+query occurs while streaming and that the only DB work is exactly one accounting insert.
+
+`GET /api/usage?start=&end=` reports the caller's requests/tokens/cost for a window (default 30 days),
+accepting ISO timestamps or bare dates; malformed or inverted ranges are 400, never 500. One tolerance
+worth noting: in a query string `+` decodes to a space, so an unencoded ISO offset — exactly what
+`datetime.isoformat()` produces — arrives mangled; the parser restores it instead of 400-ing on
+valid-looking input.
+
+The adversarial multi-agent review was the most productive one yet — 17 findings raised, **16 confirmed**
+(several reproduced empirically by the verifiers), collapsing to six real defects, all fixed:
+
+1. **Wrong model billed (medium).** The tail hardcoded `model=settings.TENANTIQ_LLM_MODEL`, but with no
+   Anthropic key — the *documented default* — answers come from local Ollama. Every row would claim
+   Anthropic Opus spend for a model that costs nothing per token (~$140 per 10k queries of fictional
+   spend). Now the view resolves the client, passes it into `stream_grounded_answer`, records
+   `llm.model`, and prices per model via `TENANTIQ_LLM_PRICES` (local/fake models at zero).
+2. **Failed generation billed the whole prompt (medium).** A provider outage produced an error frame
+   with zero output yet still charged the full input estimate, so a client retry loop could manufacture
+   spend during an outage. Now nothing is charged unless tokens were actually produced — while a
+   failure *after* partial output is still charged for what it produced.
+3. **The #48 acceptance test was genuinely weakened, not sharpened (high).** My replacement of
+   `assert len(captured) == 0` with a substring allowlist let per-token DB writes during generation pass
+   unnoticed — the verifiers demonstrated it. It now asserts **zero** queries after every streamed
+   frame (the accounting write lands only once the generator is exhausted) plus exactly one statement
+   touching the usage table. Both assertions were **mutation-tested**: a per-token write and a double
+   write each make it fail. The ADR's claim was corrected too.
+4. **A bare `end` date dropped the final day (high).** `?end=2026-07-31` resolved to midnight, silently
+   excluding the 31st from every month report. The subtlety: this cannot be done by letting
+   `parse_datetime` fail, because since Django 4.1 it delegates to `fromisoformat` and happily parses a
+   bare date — so date-only input is now detected explicitly and an end bound covers the whole day.
+5. **Inverted range only caught with both bounds (low).** `?start=2099-01-01` alone returned 200 with a
+   misleading "no spend"; validation now runs against the resolved window.
+6. **Count was a second statement (low).** `requests` came from a separate `COUNT`, so it could reflect
+   a different snapshot than the sums; it is now one aggregate.
+
+Coverage gaps the review named are closed too: client-disconnect charging (driven at the generator level
+— going through the test client fires `request_finished` and closes the connection, a harness artifact),
+mid-stream-failure charging, model attribution, the default 30-day window, and the end-date boundary.
+
+Docs: **ADR-0012** (the estimate-vs-provider-counts, placement, and Decimal forks, with honest limits)
+and a new **T8** row + usage/cost asset in the threat model. Verified: **249 passed** on real Postgres
+as `tenantiq_app` with the CI guard active (none skipped); **211 passed / 38 skipped** on SQLite.
+ruff + black clean; `makemigrations --check` clean.

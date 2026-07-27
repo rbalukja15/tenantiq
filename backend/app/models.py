@@ -196,3 +196,42 @@ class Chunk(TenantOwnedModel):
 
     def __str__(self) -> str:
         return f"{self.document_id}#{self.index}"
+
+
+class UsageRecord(TenantOwnedModel):
+    """One billable event: the tokens a request consumed and what they cost (#17, ADR-0012).
+
+    Tenant-owned, so a usage row inherits both isolation layers — a tenant can only ever read (and
+    aggregate over) its own spend, which is what makes per-tenant cost reporting safe to expose.
+
+    ``estimated_cost_usd`` is a **Decimal**, never a float: cost is money, and float representation
+    error would accumulate across rows into an unreconcilable total. ``model_name`` records which
+    model produced the charge, so a total stays attributable after a pricing or model change — the
+    price in effect at write time is baked into the row rather than recomputed later.
+
+    Token counts are *estimates* (``app.usage.estimate_tokens``) because the streaming path exposes no
+    provider usage numbers; ``kind`` leaves room for other cost sources (e.g. embeddings) later.
+    """
+
+    class Kind(models.TextChoices):
+        QUERY = "query", "Query (LLM answer generation)"
+
+    kind = models.CharField(max_length=20, choices=Kind.choices, default=Kind.QUERY)
+    model_name = models.CharField(max_length=100, blank=True, default="")
+    input_tokens = models.PositiveIntegerField(default=0)
+    output_tokens = models.PositiveIntegerField(default=0)
+    # 12 digits with 6 decimal places: sub-cent precision (a single cheap request can cost far less
+    # than a cent) with room for a large monthly total.
+    estimated_cost_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta(TenantOwnedModel.Meta):
+        abstract = False
+        ordering = ["-created_at"]
+        indexes = [
+            # The reporting access pattern: one tenant's rows over a time range (#17's endpoint).
+            models.Index(fields=["tenant", "created_at"], name="usage_tenant_created_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind} {self.input_tokens}+{self.output_tokens}tok ${self.estimated_cost_usd}"

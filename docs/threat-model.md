@@ -14,6 +14,7 @@ mitigations map to a test named in the last column.
 | The system prompt & grounding contract | If overridden, answers stop being grounded/cited and can leak or fabricate. |
 | PII inside documents | Regulated/sensitive; every store it lands in widens exposure. |
 | The shared ingestion worker | A saturated worker is denial-of-service for every tenant. |
+| Per-tenant usage & cost data | Spend reveals a tenant's query volume and behaviour — competitively sensitive even though it contains no document text. |
 | Service internals (DSNs, hostnames, keys) | Leaked internals aid a further attack. |
 
 ## Trust boundaries
@@ -48,9 +49,12 @@ mitigations map to a test named in the last column.
 | T5 | Service internals leak to a tenant via error messages | `_user_safe_message` (#47) maps every failure to a sanitized reason; the raw exception (DSNs, hostnames, paths) goes only to the server log. | — | `test_ingestion.py`, `test_documents_api.py::…error_is_sanitized…` |
 | T6 | Fabricated answers / invented citations | Grounding contract (ADR-0007/0008): answer only from numbered sources; citations resolve to real retrieved chunk IDs, invented numbers are dropped. | The LLM can still misread a source; grounding constrains, doesn't verify semantics. | `test_generation.py`, `test_rag.py` |
 
+| T8 | A tenant reads another tenant's usage/cost data (inferring its query volume and behaviour) | `UsageRecord` is a `TenantOwnedModel`, so reporting reads through the tenant-scoped manager, and migration `0012` gives the table the same **forced RLS** policy as documents/chunks (#17, ADR-0012). The `/api/usage` aggregate can only ever cover the caller's tenant. | Cost figures are *estimates* (chars-per-token heuristic), so they are a spend signal, not an invoice — see ADR-0012. Rows accumulate indefinitely (no retention policy yet). | `test_usage.py::test_summary_never_includes_another_tenants_spend`, `test_usage_api.py::test_usage_endpoint_never_reports_another_tenants_spend`, `test_rls.py::test_every_tenant_owned_table_has_forced_rls` |
+
 ## Out of scope (tracked elsewhere)
 
-- Per-tenant cost/token accounting (#17) — precise per-token/$ metering on top of T7's request-count quotas.
+- Exact provider token counts — #17 ships estimates; replacing them means surfacing provider usage through the streaming `LLMClient` (ADR-0012).
+- Embedding (ingest) cost metering — `UsageRecord.kind` leaves room for it; ingest volume is already bounded by #47.
 - Unauthenticated / per-IP edge throttling (#25) — a WAF concern; DRF rejects anon requests before app-layer throttles run.
 - Secrets management, network policy, and infra hardening (deployment concern, M6+).
 - Semantic correctness of answers beyond grounding (evaluation suite, #21/M5).

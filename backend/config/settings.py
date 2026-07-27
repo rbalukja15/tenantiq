@@ -99,6 +99,15 @@ REST_FRAMEWORK = {
     },
 }
 
+# Per-tenant cost & token accounting (#17, ADR-0012). Prices are USD per *million* tokens, read as
+# Decimal strings (never floats — money). Defaults track Claude Opus 4.8 list pricing; an operator
+# retunes them per deployment/model. Output tokens are the dearer side, hence separate prices. The
+# price in effect at write time is baked into each UsageRecord, so a later change can't rewrite history.
+TENANTIQ_LLM_PRICE_INPUT_PER_MTOK = os.environ.get("TENANTIQ_LLM_PRICE_INPUT_PER_MTOK", "5.00")
+TENANTIQ_LLM_PRICE_OUTPUT_PER_MTOK = os.environ.get("TENANTIQ_LLM_PRICE_OUTPUT_PER_MTOK", "25.00")
+# Per-model price overrides are defined with the LLM settings below (they key off the model names
+# configured there): see TENANTIQ_LLM_PRICES.
+
 # Per-tenant query *volume* quotas (#49, ADR-0011) — the counting half of the quota hooks, over a
 # fixed calendar window. Distinct from the per-minute burst rates above: these cap total query
 # requests per tenant per day/month, the guardrail against sustained LLM spend before #17's precise
@@ -218,3 +227,13 @@ TENANTIQ_LLM_FACTORY = os.environ.get(
         else "app.generation.build_default_llm"
     ),
 )
+
+# Per-model price overrides for cost accounting (#17, ADR-0012), keyed by the model name the *serving*
+# client reports (app.generation clients expose `.model`). A deployment with no Anthropic key answers
+# from the local Ollama model, which carries no per-token cost — billing it at the Anthropic default
+# would report spend that never happened — so local/fake models are priced at zero here. A model with
+# no entry falls back to the global TENANTIQ_LLM_PRICE_* pair above.
+TENANTIQ_LLM_PRICES: dict[str, dict[str, str]] = {
+    TENANTIQ_LLM_OLLAMA_MODEL: {"input": "0", "output": "0"},
+    "fake-llm-v1": {"input": "0", "output": "0"},  # the hermetic test / offline client
+}
