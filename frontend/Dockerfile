@@ -1,5 +1,6 @@
 # Frontend image — the Next.js dev server for the local stack (#23).
-FROM node:20-alpine
+# Node 22 LTS: Node 20 is end-of-life, and the #52 toolchain (vitest 4, jsdom 30) requires >= 22.
+FROM node:22-alpine
 
 WORKDIR /app
 

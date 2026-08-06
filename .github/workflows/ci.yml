@@ -72,10 +72,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node 20 went end-of-life in April 2026, and the refreshed frontend toolchain (#52)
+          # requires >= 22 anyway (vitest 4 / rolldown, jsdom 30). Pinned to the LTS line.
+          node-version: "22"
       - name: Install dependencies
         run: npm ci
       - name: Lint
         run: npm run lint
+      - name: Typecheck
+        # TS strict is a project convention (CLAUDE.md); without this it was only enforced at build.
+        run: npm run typecheck
       - name: Test
         run: npm test --if-present
+      - name: Build
+        # The only check that exercises the real Next/React compile path — server/client boundary
+        # violations and bad `Link` hrefs pass lint and `tsc --noEmit` but fail here (#52).
+        run: npm run build
