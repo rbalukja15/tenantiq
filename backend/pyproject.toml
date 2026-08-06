@@ -8,7 +8,13 @@ version = "0.1.0"
 description = "TenantIQ backend — multi-tenant RAG API"
 requires-python = ">=3.12"
 dependencies = [
-    "django>=5.0",
+    # Upper bound is deliberate (#71): Django 6.1 removed `django.utils.cache.cc_delim_re`, which
+    # every released DRF (through 3.17.2) still imports — so an unpinned `django>=5.0` silently
+    # resolved to a pair that fails at import time, turning CI red with no commit behind it. DRF's
+    # own `django>=4.2` is unbounded and offers no protection. Raise this ceiling only together with
+    # a DRF release that declares support for the newer Django (check its `Framework :: Django ::`
+    # classifiers), not as a routine bump.
+    "django>=5.0,<6.1",
     "djangorestframework>=3.15",
     "celery>=5.3",
     "redis>=5.0",
