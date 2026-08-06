@@ -508,3 +508,84 @@ Docs: **ADR-0012** (the estimate-vs-provider-counts, placement, and Decimal fork
 and a new **T8** row + usage/cost asset in the threat model. Verified: **249 passed** on real Postgres
 as `tenantiq_app` with the CI guard active (none skipped); **211 passed / 38 skipped** on SQLite.
 ruff + black clean; `makemigrations --check` clean.
+
+**M3 closed at 22/22.** The RAG query engine is complete: retrieval, grounded generation with enforced
+citations, a streaming API, isolation proofs, ingestion bounds, PII + injection guardrails, per-tenant
+rate limits and quotas, and cost accounting.
+
+## 2026-07-27 — M4 #52: frontend foundations — ADR-0013 + a toolchain that can test UI
+
+M4 is the product surface (app shell #18, streaming chat #19, documents #20), and #18 couldn't start:
+four foundational questions were open, and the scaffold **could not test a component at all**.
+
+**The decisions (ADR-0013).** The load-bearing one is *where the token lives*, because it determines
+everything else. Chosen: a **BFF proxy** — Next route handlers under `/api/*` hold the OIDC session in
+an **httpOnly** cookie the page's JS cannot read and attach the bearer server-side. A token in
+`localStorage` is XSS-exfiltratable, and even an in-memory token still sits in a scriptable context
+and forces CORS on the API. The BFF removes **CORS from the API surface** — every `fetch` the page makes
+is same-origin — at the cost of a server hop per call and having to stream SSE through the proxy rather
+than buffering it. The trade that must not be glossed over: **cookies mean owning CSRF**. A bearer token
+has to be *added* by script, so a cross-site request can never carry it; a cookie the browser attaches
+automatically can. `SameSite=Lax` covers the cross-site POST (and `Lax` rather than `Strict` is forced
+by the OIDC redirect-back needing to arrive authenticated), but it's one control, not the answer — so
+#18 also ships a double-submit anti-CSRF token on state-changing proxy routes. The ADR names this
+explicitly rather than letting it be discovered late.
+
+**Tenant discovery** resolves a genuine chicken-and-egg: per-tenant OIDC config lives only in the DB
+(ADR-0002) and `/api/me` needs a token, so the login page can't know which realm to use. Chosen: a
+public `GET /api/tenants/discovery?slug=` returning **only** `{issuer, client_id}` — both public by
+definition in OIDC — 404 for unknown/inactive tenants, rate-limited on the existing `read` scope. The
+honest cost is recorded: it's an unauthenticated slug-**enumeration** oracle. Enumerating names is
+acceptable; enumerating data stays impossible. (Subdomain→realm mapping was the alternative, deferred
+for wildcard DNS/TLS reasons; the endpoint doesn't preclude it.) Also fixed: Server Components by
+default with plain `fetch` for interactive state (no cache library adopted before the problem shows
+up), and `fetch` + `ReadableStream` with an explicit SSE parser that tolerates a frame split across
+chunk boundaries — a real cause of dropped tokens.
+
+**The toolchain**, which is why #52 was blocking: React 19 + Next 16 (the App Router's supported
+pairing), ESLint 9 **flat config** — and `eslint-config-next@16` turns out to ship a *native* flat
+config array, so the `FlatCompat` bridge I first reached for was not just unnecessary but actually
+crashed on a circular reference — plus vitest 4 + jsdom + Testing Library + **MSW**. Mocking sits at
+the network boundary so a component's real fetch-and-parse code runs under test, with unhandled
+requests configured to **error** so a test can't quietly pass against a request nobody mocked.
+`TenantBadge` proves the harness end to end: it renders, fetches a mocked `/api/me`, and shows a
+generic message on failure without echoing the API's error.
+
+One trap worth recording: **Node 20 is end-of-life** (April 2026) and the new stack requires ≥22
+anyway (vitest 4/rolldown needs ≥22.12, jsdom 30 needs ≥22.22) — vitest simply refused to start on the
+older runtime. CI and the frontend image both moved to **Node 22 LTS**, and CI gained a `typecheck`
+step so "TypeScript strict, no `any`" is enforced before build time instead of at it.
+
+The adversarial review earned its keep again — 24 findings raised, **17 confirmed**, collapsing to
+eight real defects, and the worst was in the very thing this issue exists to deliver:
+
+1. **The test harness was vacuous (high).** `onUnhandledRequest: "error"` is *not* enough: MSW rejects
+   the unmocked request, the component catches that and renders its own error state, and the test
+   passes. I proved it by deleting the handler from the error test — still green. So the harness could
+   not tell "the API returned 500" from "nobody mocked anything". Fixed by recording
+   `request:unhandled` events and failing in `afterEach`; deleting the handler now fails loudly.
+2. **Lint enforced neither of the things it claimed.** `next/typescript` registers the TS parser but
+   ships an **empty rule set**, so "no `any`" (a CLAUDE.md convention) was enforced by nothing — and
+   Next's a11y rules are *warnings*, which `eslint .` exits 0 on. Now `no-explicit-any` and
+   `no-unused-vars` are errors and the script runs `--max-warnings 0`; verified by probe file.
+3. **The declared Node floor was wrong.** `>=22.0.0` admits 22.0–22.22.1, where `npm ci` succeeds with
+   only warnings and vitest then dies with an opaque `ERR_REQUIRE_ESM` — the exact trap this entry
+   describes, re-armed. Now `>=22.22.2` (jsdom 30's real floor) plus `engine-strict=true` in `.npmrc`
+   so an unsupported runtime fails at install with a legible reason.
+4. **The ADR credited CI with a `build` step that did not exist.** Rather than weaken the doc, the step
+   was added: it is the only check that exercises the real Next/React compile path (a server/client
+   boundary violation passes both lint and `tsc --noEmit`).
+5. Smaller, all real: the `@` alias used `URL.pathname` (percent-encoded — breaks on any checkout path
+   containing a space; now `fileURLToPath`); `globals: true` advertised a style CI's typecheck would
+   reject (removed); `include` matched only `tests/**`, so a test colocated beside a component in
+   #19/#20 would be **silently never run**; and §4 still rejected `EventSource` on the
+   Authorization-header grounds that the BFF decision had just made moot — the real reason is that it
+   is GET-only while `/api/query` is a POST.
+
+Two more I caught before the review returned: the ADR omitted **CSRF** entirely (above), and a fresh
+clone has no `next-env.d.ts` (now gitignored) — I simulated a clean checkout to confirm `npm ci &&
+lint && typecheck && test` still passes without it.
+
+Verified on Node 22.23.2, `npm ci` from a clean tree: `npm run lint`, `npm run typecheck`, `npm test`
+(**3 passed**), `npm run format`, and `npm run build` all green. No backend changes — the discovery
+endpoint itself is #18's work.
