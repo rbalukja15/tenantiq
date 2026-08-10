@@ -589,3 +589,66 @@ lint && typecheck && test` still passes without it.
 Verified on Node 22.23.2, `npm ci` from a clean tree: `npm run lint`, `npm run typecheck`, `npm test`
 (**3 passed**), `npm run format`, and `npm run build` all green. No backend changes — the discovery
 endpoint itself is #18's work.
+
+## 2026-08-10 — M4 #18: app shell + auth (the BFF, end to end)
+The issue ADR-0013 was written to unblock. Everything that ADR deferred lands here: the public
+discovery endpoint, the OIDC login/logout flow, the session cookie, the proxy, and CSRF.
+
+I ran an adversarial design review **before** writing any auth code — five lenses (OAuth/OIDC,
+cookies/CSRF, Next 16 mechanics, proxy/SSRF, testability), every finding independently verified.
+36 raised, **26 confirmed**, and it changed nine substantive decisions. Three of them were mine from
+ADR-0013, so the ADR carries three explicit corrections rather than being quietly rewritten:
+
+1. **The discovery throttle was wrong twice.** ADR-0013 said "rate-limited on the existing `read`
+   scope". That would have done nothing: the tenant-keyed throttles return a `None` cache key when
+   there is no tenant, and DRF treats that as *do not throttle* — the project's only public endpoint,
+   entirely unbounded. I caught that myself and replaced it with an IP key. **That was also wrong**,
+   and the review caught it: under a BFF the browser never calls this endpoint, the Next server does,
+   so Django sees one `REMOTE_ADDR` for every request. An IP key is one *global* bucket, and a single
+   anonymous flood denies login to every tenant at once. It is keyed on the requested slug now, so
+   the blast radius is the tenant actually under attack. An attacker rotating slugs is unbounded by
+   it; that is stated rather than hidden.
+2. **The session cookie could not hold the token.** Browsers cap a cookie at ~4 KB and *silently
+   drop* an oversized `Set-Cookie` — so a realm with a few role claims, plus refresh and ID tokens,
+   gives a login that succeeds server-side and then loops invisibly, on that tenant only, in
+   production only. The cookie is an opaque id now; the tokens stay server-side.
+3. **The double-submit CSRF token is not the control.** It proves only that the caller could *read*
+   the cookie, and cookie write scope is same-**site**, not same-**origin**: a sibling subdomain — or
+   in dev any other port on `localhost`, since cookies ignore ports — can plant both halves. `Origin`
+   equality is checked first and fails closed; the token is defence in depth.
+
+The nastiest finding was one I would not have looked for: **login had to be a POST**. `SameSite=Lax`
+deliberately permits top-level GET navigations, so a `GET /api/auth/login?tenant=` lets any website
+push a visitor into an *attacker-chosen* tenant. The victim authenticates against the attacker's
+realm and their next upload lands in the attacker's workspace — tenant isolation holding perfectly
+at every layer the whole time. It is an authentication flaw wearing an isolation flaw's clothes, and
+it is now T9 in the threat model.
+
+Two more the tests found that the review had not:
+
+- **A path traversal in my own proxy.** `.` has to be in the segment charset (filenames), which makes
+  a dots-only segment the one traversal a charset cannot catch. `x/../../media/secret.pdf` resolved
+  to `/media/secret.pdf` — outside `/api` entirely, with a valid tenant bearer attached. The test
+  that caught it asserts *nothing was fetched*, which is why it failed loudly instead of quietly
+  returning 502.
+- **My header-allowlist tests were vacuous.** Mutating the proxy to forward the browser's headers
+  wholesale left them green. In this harness some headers the route provably holds do not survive
+  MSW interception, so the integration assertion could not tell the two implementations apart. I
+  extracted the policy into `lib/upstream.ts` as pure functions with exact-equality assertions;
+  both mutations now fail. The limitation is recorded in that file rather than glossed over.
+
+Every security control is mutation-tested — 11 mutations across the two halves, each caught by the
+specific test that claims it. 102 frontend tests, 227 backend; lint, typecheck and `next build` green
+on Node 22.23.2.
+
+Deliberately not built, and why: no AES-GCM sealed cookies (moot once the cookie is an opaque id), no
+HMAC on the transaction cookie (`__Host-` already makes it unsettable by a sibling host), no
+single-flight refresh lock (Keycloak's refresh rotation is off by default, so a racing double refresh
+is idempotent), and no `next`/`returnTo` parameter — not adding one removes the open-redirect class
+outright. Back-channel logout is deferred and bounded: an IdP-side termination takes effect at the API
+when the access token expires.
+
+The one thing I could not verify without a live Keycloak is that the `globalThis`-pinned session store
+is genuinely one instance across the callback handler, the proxy handler and the Server Component
+under `make dev`. The pin exists precisely so separate Next bundles cannot produce separate maps, but
+it is worth a real login before anyone trusts it in anger.

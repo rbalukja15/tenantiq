@@ -117,7 +117,13 @@ services:
   frontend:
     build: ./frontend
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      # Server-side only (ADR-0013 §1): the browser never calls Django directly, so this is the
+      # *in-network* address the Next server uses — deliberately not localhost, and deliberately not
+      # a NEXT_PUBLIC_ variable, which would be inlined into the browser bundle.
+      API_BASE_URL: http://backend:8000
+      # This app's own public origin, as the browser sees it. Used for the OIDC redirect_uri and as
+      # the Origin every state-changing request must match.
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
     volumes:
       - "./frontend:/app"
       - "/app/node_modules" # keep the image's install; don't shadow with the host's

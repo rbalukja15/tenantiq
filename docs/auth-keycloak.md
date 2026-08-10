@@ -21,12 +21,24 @@ Log in with `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` (see `.env.example`).
 Create a realm named e.g. `acme`. Its issuer is then
 `http://localhost:8080/realms/acme` — this is the value you store in `Tenant.oidc_issuer`.
 
+The frontend fetches `${oidc_issuer}/.well-known/openid-configuration` and **rejects the document
+unless its `issuer` matches exactly**, so the stored value has to be the issuer Keycloak actually
+advertises. `start-dev` derives it from the request host, which is the usual cause of a mismatch when
+the browser reaches Keycloak on one hostname and the Next server reaches it on another. In production
+the issuer must be `https`; the `http://localhost:8080/...` value above is dev-only.
+
 ## 3. Create a client
 
 In the realm, create a client (e.g. `tenantiq-acme`):
-- Client authentication: **On** (confidential) for a backend-to-backend flow, or Off for a
-  public SPA client used by the M4 frontend.
-- Valid redirect URIs / web origins: your frontend URL (`NEXT_PUBLIC_API_URL` host).
+- Client authentication: **Off (public)**. The M4 frontend signs in with Authorization Code +
+  PKCE (S256) and sends **no client secret** — turning this On makes the token exchange fail with
+  `invalid_client`, and `Tenant` has no field to store a secret in (ADR-0013 §1).
+- Valid redirect URIs: exactly `${APP_BASE_URL}/api/auth/callback` — for local dev,
+  `http://localhost:3000/api/auth/callback`. Use the exact URI, not a wildcard.
+- Valid post-logout redirect URIs: `${APP_BASE_URL}/login`. (Keycloak's `+` shorthand inherits the
+  redirect URIs above; set it explicitly if logout bounces to an error page.)
+- Web origins: not needed. Under the BFF the browser only ever talks to the Next server, so no
+  cross-origin call reaches Keycloak from the page.
 
 Store the client id in `Tenant.oidc_client_id`.
 

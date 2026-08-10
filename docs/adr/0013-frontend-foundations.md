@@ -32,8 +32,25 @@ component-test infrastructure at all** (no DOM, no Testing Library, no API mocki
 ### 1. Token storage: a BFF proxy with httpOnly cookies
 
 The browser **never holds an access token**. Next.js route handlers under `/api/*` act as a
-Backend-for-Frontend: they hold the OIDC session in an **httpOnly, Secure, SameSite=Lax cookie** the
-page's JavaScript cannot read, and attach the bearer token to the upstream Django call server-side.
+Backend-for-Frontend: they hold an **opaque session id** in an httpOnly, Secure, SameSite=Lax cookie
+the page's JavaScript cannot read; the tokens themselves never leave the server. The id resolves to a
+server-side session record, and the route handler attaches the bearer token to the upstream Django
+call.
+
+*(Corrected during #18. The original wording put the token itself in the cookie. Browsers cap a
+cookie at roughly 4 KB and **silently drop** an oversized `Set-Cookie` — no error, no warning — so a
+realm whose access token carries a few roles and groups, plus a refresh token and an ID token, would
+produce a login that succeeds server-side followed by an invisible redirect loop: on that tenant only,
+in production only. An opaque id is a fixed ~36 bytes whatever the IdP emits. The store is an
+in-process `Map` pinned on `globalThis`; a frontend restart drops sessions and users re-login through
+a still-valid IdP SSO session, which costs one invisible redirect. Swapping it for Redis is one file
+behind an unchanged interface.)*
+
+The BFF authenticates as a **public** OAuth client using Authorization Code + PKCE (S256). No
+per-tenant client secret is stored: the only per-tenant configuration channel is the deliberately
+public discovery endpoint (§2), so a secret would require a second, authenticated Next→Django
+configuration channel with its own credential. This is the RFC 9700 posture for browser-delivered
+flows; confidential clients remain the documented upgrade path.
 
 Rejected alternatives:
 
@@ -59,10 +76,21 @@ Consequences of the BFF choice, all deliberate:
   `SameSite=Lax` blocks the cross-site POST case in every currently supported browser, but it is one
   control, not a complete answer (it does not cover same-site subdomain attackers, and `Lax` is
   required rather than `Strict` because the OIDC provider redirects back with a top-level navigation
-  that must arrive already authenticated). **#18 therefore also ships an explicit anti-CSRF token on
-  state-changing proxy routes** (double-submit cookie + header, rejected server-side when absent or
-  mismatched); read-only routes are safe under `Lax` alone. Naming this here so it is not discovered
-  late: choosing cookies means owning CSRF.
+  that must arrive already authenticated). **#18 therefore rejects every state-changing request whose
+  `Origin` header is absent or does not equal `APP_BASE_URL`**, and additionally ships a double-submit
+  cookie + header token as defence in depth. Naming this here so it is not discovered late: choosing
+  cookies means owning CSRF.
+
+  *(Corrected during #18. The original wording made the double-submit token the control. It cannot
+  be: a double-submit token proves only that the caller could **read** the cookie, and cookie write
+  scope is same-**site**, not same-**origin** — a sibling subdomain, or in development any other port
+  on `localhost` (cookies ignore ports), can plant both halves of the pair and pass. `Origin` includes
+  scheme, host and port and cannot be forged by a cross-origin page, so it is the load-bearing check
+  and runs first. This also applies to **starting** a login, which is why `/api/auth/login` is a POST:
+  `SameSite=Lax` deliberately permits top-level GET navigations, so a GET login endpoint would let any
+  site push a visitor into an attacker-chosen tenant — the victim authenticates against the attacker's
+  realm and their next upload lands in the attacker's workspace. Tenant isolation holds perfectly at
+  every layer and the data still crosses.)*
 
 ### 2. Tenant discovery: a public, minimal discovery endpoint
 
@@ -80,9 +108,21 @@ Rejected alternatives:
   the point of the project.
 
 Accepted costs: it is an **unauthenticated endpoint**, so it is a tenant-slug enumeration oracle (an
-attacker can learn which slugs exist). It therefore returns a minimal payload, is rate-limited on the
-existing `read` scope (#49, ADR-0011), and must never leak tenant counts or a listing. Enumeration of
-*names* is judged acceptable; enumeration of *data* is not, and remains impossible.
+attacker can learn which slugs exist). It therefore returns a minimal payload, is rate-limited on its
+own `discovery` scope keyed on a hash of the requested **slug** (#49, ADR-0011), and must never leak
+tenant counts or a listing. Enumeration of *names* is judged acceptable; enumeration of *data* is not,
+and remains impossible.
+
+*(Corrected during #18 — twice, because the first replacement was also wrong. It cannot reuse the
+`read` scope: the tenant-keyed throttles return a `None` cache key when there is no tenant, which DRF
+treats as "do not throttle", so the project's only public endpoint would have been entirely unbounded.
+Nor can it be keyed on the client IP: under the BFF (§1) the browser never calls this endpoint — the
+Next server calls it on the browser's behalf — so Django sees one `REMOTE_ADDR` for every discovery
+request, making an IP key a single global bucket in which one anonymous flood denies login to every
+tenant at once. A slug key bounds the blast radius to the tenant actually under attack. An attacker
+rotating slugs is not bounded by this at all; that is accepted, since slug enumeration is already
+accepted above and this is one indexed lookup returning public values. Per-client rate limiting is not
+expressible in Django behind a BFF and belongs at the edge if it is ever wanted.)*
 
 *(Implementing this endpoint belongs to #18; #52 only fixes the decision.)*
 
@@ -148,3 +188,8 @@ violation passes both lint and `tsc --noEmit` and fails only there).
 - **Sequencing.** #18 implements the discovery endpoint, the proxy route handlers, and the session
   cookie; #19 builds the SSE parser and chat UI on top; #20 reuses the same fetch conventions. The
   frontend Dockerfile and CI both moved to Node 22 in this change so nothing else has to.
+- **Deferred, and bounded.** Back-channel logout and token revocation are not implemented.
+  `app/auth/verifier.py` validates signature, issuer, audience and expiry with no introspection call,
+  so terminating a session or disabling a user at the IdP takes effect at the API only once the
+  current access token expires (Keycloak's default is five minutes). Bounded, and named here rather
+  than discovered later.
