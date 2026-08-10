@@ -92,10 +92,14 @@ REST_FRAMEWORK = {
     # another tenant's. Scopes: query (LLM-backed, expensive) < uploads < reads. Env-overridable so
     # limits are configuration, not code; the query endpoint must be bounded before any public deploy
     # (#25). None disables a scope.
+    # 'discovery' is the odd one out: it bounds the unauthenticated tenant-discovery endpoint (#18),
+    # which has no tenant to key on and so gets a client-keyed bucket of its own. Keeping it a
+    # separate scope means anonymous traffic can never spend a real tenant's 'read' budget.
     "DEFAULT_THROTTLE_RATES": {
         "query": os.environ.get("TENANTIQ_THROTTLE_QUERY", "30/min"),
         "upload": os.environ.get("TENANTIQ_THROTTLE_UPLOAD", "20/min"),
         "read": os.environ.get("TENANTIQ_THROTTLE_READ", "120/min"),
+        "discovery": os.environ.get("TENANTIQ_THROTTLE_DISCOVERY", "30/min"),
     },
 }
 

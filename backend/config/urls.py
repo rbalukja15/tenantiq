@@ -7,10 +7,14 @@ from app.views import (
     DocumentRetryView,
     MeView,
     QueryView,
+    TenantDiscoveryView,
     UsageView,
 )
 
 urlpatterns = [
+    # The only unauthenticated route: the login page needs a tenant's OIDC issuer + client id
+    # *before* it can obtain a token (#18, ADR-0013 §2).
+    path("api/tenants/discovery", TenantDiscoveryView.as_view(), name="tenant-discovery"),
     path("api/me", MeView.as_view(), name="me"),
     path("api/documents", DocumentListCreateView.as_view(), name="documents"),
     path("api/documents/<int:pk>/retry", DocumentRetryView.as_view(), name="document-retry"),

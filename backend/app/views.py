@@ -15,8 +15,9 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import generics, status
+from rest_framework.exceptions import NotFound
 from rest_framework.negotiation import BaseContentNegotiation
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -28,12 +29,13 @@ from app.generation import (
     get_llm,
     stream_grounded_answer,
 )
-from app.models import Document
+from app.models import Document, Tenant
 from app.rag import retrieve_context
 from app.serializers import DocumentSerializer
 from app.tasks import ingest_document
 from app.throttling import (
     QUERY_QUOTA_THROTTLES,
+    PublicDiscoveryRateThrottle,
     TenantQueryRateThrottle,
     TenantReadRateThrottle,
     TenantUploadRateThrottle,
@@ -61,6 +63,44 @@ class MeView(APIView):
                 "tenant": {"id": str(tenant.id), "slug": tenant.slug, "name": tenant.name},
             }
         )
+
+
+class TenantDiscoveryView(APIView):
+    """Public per-tenant OIDC discovery: ``GET /api/tenants/discovery?slug=`` (#18, ADR-0013 §2).
+
+    Resolves the login flow's chicken-and-egg. Per-tenant OIDC configuration lives only in the
+    database (ADR-0002) and every other endpoint needs a token, so a browser on the login page has no
+    way to learn *which* realm and client to authenticate against — it needs that configuration
+    *before* it can obtain a token. This hands it exactly two values and nothing else.
+
+    **This is the project's only unauthenticated endpoint**, hence the deliberate shape:
+
+    - ``authentication_classes = []``. Not merely "authentication optional": running the tenant
+      authenticator here would make a stale or expired token in the browser turn discovery into a
+      401, stranding the very user who is trying to log in again.
+    - Both returned values are **public by definition** in OIDC — the issuer is fetched
+      unauthenticated at ``/.well-known/openid-configuration``, and a public client id is not a
+      secret. Nothing else about the tenant (id, name, document counts, membership) is exposed.
+    - Unknown, inactive, and missing-slug all return the **same** 404 body. A distinct status or
+      message for any of them would report which slugs exist as customers and which have churned.
+
+    The accepted cost, recorded in ADR-0013: this is a tenant-slug *enumeration* oracle. Enumerating
+    names is judged acceptable; enumerating data stays impossible, because no tenant-owned row is
+    reachable from here.
+    """
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+    throttle_classes = [PublicDiscoveryRateThrottle]
+
+    def get(self, request: Request) -> Response:
+        slug = (request.query_params.get("slug") or "").strip()
+        # Exact match on the trimmed slug: SlugField is unique, so this is unambiguous. A
+        # case-insensitive lookup would be friendlier but could match two distinct rows.
+        tenant = Tenant.objects.filter(slug=slug, is_active=True).first() if slug else None
+        if tenant is None:
+            raise NotFound()
+        return Response({"issuer": tenant.oidc_issuer, "client_id": tenant.oidc_client_id})
 
 
 class DocumentListCreateView(generics.ListCreateAPIView):

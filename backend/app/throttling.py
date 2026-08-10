@@ -62,14 +62,11 @@ def _tenant_ident(request) -> str | None:
 # --- rate throttles (sliding window, per tenant) --------------------------------------------------
 
 
-class _TenantScopedRateThrottle(SimpleRateThrottle):
-    """A :class:`SimpleRateThrottle` bucketed by tenant + scope rather than by user or IP.
+class _ConfiguredRateThrottle(SimpleRateThrottle):
+    """Behaviour shared by every rate throttle here, independent of what the bucket is keyed on.
 
-    Three differences from the DRF base:
+    Two differences from the DRF base:
 
-    - :meth:`get_cache_key` keys on ``request.tenant.id``, so the bucket is the tenant, not the
-      individual user — a tenant's whole workforce shares (and is bounded by) one budget, and no
-      tenant can reach into another's bucket.
     - :meth:`get_rate` reads the configured rate *fresh* from DRF's settings on each instantiation.
       ``SimpleRateThrottle`` binds ``THROTTLE_RATES`` at import time, which would make the rate
       un-overridable at runtime (and in tests). Reading ``api_settings`` fresh keeps the rate true
@@ -81,18 +78,27 @@ class _TenantScopedRateThrottle(SimpleRateThrottle):
     def get_rate(self) -> str | None:
         return api_settings.DEFAULT_THROTTLE_RATES.get(self.scope)
 
-    def get_cache_key(self, request, view) -> str | None:
-        ident = _tenant_ident(request)
-        if ident is None:
-            return None  # no tenant -> not rate-limited here (the 401 already happened)
-        return self.cache_format % {"scope": self.scope, "ident": ident}
-
     def allow_request(self, request, view) -> bool:
         try:
             return super().allow_request(request, view)
         except _CACHE_UNAVAILABLE:  # cache down -> fail open, don't take the API down
             logger.warning("throttle cache unavailable; failing open for scope=%s", self.scope)
             return True
+
+
+class _TenantScopedRateThrottle(_ConfiguredRateThrottle):
+    """A rate throttle bucketed by tenant + scope rather than by user or IP.
+
+    :meth:`get_cache_key` keys on ``request.tenant.id``, so the bucket is the tenant, not the
+    individual user — a tenant's whole workforce shares (and is bounded by) one budget, and no
+    tenant can reach into another's bucket.
+    """
+
+    def get_cache_key(self, request, view) -> str | None:
+        ident = _tenant_ident(request)
+        if ident is None:
+            return None  # no tenant -> not rate-limited here (the 401 already happened)
+        return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
 class TenantQueryRateThrottle(_TenantScopedRateThrottle):
@@ -111,6 +117,35 @@ class TenantReadRateThrottle(_TenantScopedRateThrottle):
     """Burst limit for cheap read endpoints (listing documents, identity)."""
 
     scope = "read"
+
+
+# --- public (pre-authentication) rate throttle ----------------------------------------------------
+
+
+class PublicDiscoveryRateThrottle(_ConfiguredRateThrottle):
+    """Burst limit for the unauthenticated tenant-discovery endpoint (#18, ADR-0013 §2).
+
+    Discovery is the one route a caller reaches *before* it has a token, so there is no tenant to key
+    on — and the tenant-scoped throttles above deliberately return a ``None`` cache key in that case,
+    which DRF treats as "do not throttle". Reusing one of them here would therefore have left the
+    project's only public endpoint completely unbounded. It gets its own **client-keyed** bucket and
+    its own ``discovery`` scope instead.
+
+    Two consequences of keying on the client rather than the tenant, both deliberate:
+
+    - A stranger's traffic can never draw down a *tenant's* authenticated ``read`` budget. If
+      discovery shared the ``read`` scope, an anonymous flood could rate-limit a paying tenant off
+      the API — a denial-of-service handed out for free.
+    - The identity is DRF's ``get_ident``, i.e. the client IP (honouring ``NUM_PROXIES`` when set).
+      That is spoofable behind a proxy that forwards an unvalidated ``X-Forwarded-For``, and it
+      buckets everyone behind one NAT together. Both are accepted: this is a cheap single-row lookup
+      whose contents are public by design, so the throttle is abuse damping, not a security control.
+    """
+
+    scope = "discovery"
+
+    def get_cache_key(self, request, view) -> str | None:
+        return self.cache_format % {"scope": self.scope, "ident": self.get_ident(request)}
 
 
 # --- quota throttles (fixed calendar window, per tenant) ------------------------------------------
