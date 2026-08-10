@@ -31,6 +31,7 @@ request is already rejected with 401 before any throttle sees it. When a throttl
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timedelta
 
@@ -127,25 +128,35 @@ class PublicDiscoveryRateThrottle(_ConfiguredRateThrottle):
 
     Discovery is the one route a caller reaches *before* it has a token, so there is no tenant to key
     on — and the tenant-scoped throttles above deliberately return a ``None`` cache key in that case,
-    which DRF treats as "do not throttle". Reusing one of them here would therefore have left the
-    project's only public endpoint completely unbounded. It gets its own **client-keyed** bucket and
-    its own ``discovery`` scope instead.
+    which DRF treats as "do not throttle". Reusing one of them here would have left the project's
+    only public endpoint completely unbounded.
 
-    Two consequences of keying on the client rather than the tenant, both deliberate:
+    **The bucket is the requested slug, not the client.** Keying on the client IP looks like the
+    obvious choice and is wrong here: under the BFF (ADR-0013 §1) the browser never calls this
+    endpoint — the Next server does, on the browser's behalf — so Django sees a single
+    ``REMOTE_ADDR`` for *every* discovery request in production. An IP key would therefore be one
+    global bucket, and a single anonymous flood would deny login to every tenant at once. Keying on
+    the slug keeps the blast radius to the tenant actually under attack, which is the same isolation
+    promise the rest of the system makes: one tenant's traffic can never degrade another's.
 
-    - A stranger's traffic can never draw down a *tenant's* authenticated ``read`` budget. If
-      discovery shared the ``read`` scope, an anonymous flood could rate-limit a paying tenant off
-      the API — a denial-of-service handed out for free.
-    - The identity is DRF's ``get_ident``, i.e. the client IP (honouring ``NUM_PROXIES`` when set).
-      That is spoofable behind a proxy that forwards an unvalidated ``X-Forwarded-For``, and it
-      buckets everyone behind one NAT together. Both are accepted: this is a cheap single-row lookup
-      whose contents are public by design, so the throttle is abuse damping, not a security control.
+    Two honest limits. An attacker who *rotates* slugs spreads across buckets and is not bounded by
+    this at all — accepted, because ADR-0013 already accepts slug enumeration and this is a single
+    indexed row lookup returning public values. And a determined flood against one slug denies that
+    tenant's logins; per-client limiting is not expressible in Django under a BFF and belongs at the
+    edge if it is ever wanted.
+
+    The slug is hashed to bound the **key size**, not to obfuscate it: the view does not length-limit
+    the raw query parameter, and the ident is interpolated straight into the cache key — which lands
+    in the same Redis that serves as the Celery broker. Hashing keeps an oversized parameter from
+    turning anonymous traffic into broker memory pressure.
     """
 
     scope = "discovery"
 
     def get_cache_key(self, request, view) -> str | None:
-        return self.cache_format % {"scope": self.scope, "ident": self.get_ident(request)}
+        slug = (request.query_params.get("slug") or "").strip().lower()
+        ident = hashlib.sha256(slug.encode()).hexdigest()[:32]
+        return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
 # --- quota throttles (fixed calendar window, per tenant) ------------------------------------------

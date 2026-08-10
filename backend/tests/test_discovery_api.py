@@ -150,12 +150,51 @@ def test_discovery_needs_no_active_tenant_context(api, tenants):
 
 def test_discovery_is_rate_limited_even_though_there_is_no_tenant(api, tenants, settings):
     # The per-tenant throttles key on request.tenant, which is absent here — so this endpoint needs
-    # its own client-keyed budget, or the project's only public route would be entirely unbounded.
+    # a budget of its own, or the project's only public route would be entirely unbounded.
     _set_rates(settings, discovery="3/min")
 
     codes = [api.get(URL, {"slug": "acme"}).status_code for _ in range(4)]
 
     assert codes == [200, 200, 200, 429]
+
+
+def test_flooding_one_slug_does_not_deny_login_to_another_tenant(api, tenants, settings):
+    # The bucket must be the *slug*, not the caller. Under the BFF the browser never reaches this
+    # endpoint — the Next server does, on its behalf — so in production every discovery request
+    # arrives from one address. Keying on the client would make this a single global bucket, and one
+    # anonymous flood would deny login to every tenant at once. Keying on the slug keeps the damage
+    # to the tenant actually under attack, which is the isolation promise the rest of the system
+    # makes. This is the test that tells those two implementations apart.
+    _set_rates(settings, discovery="1/min")
+
+    assert api.get(URL, {"slug": "acme"}).status_code == 200
+    assert api.get(URL, {"slug": "acme"}).status_code == 429  # acme's own budget is spent
+
+    assert api.get(URL, {"slug": "globex"}).status_code == 200  # globex can still log in
+
+
+def test_the_discovery_scope_is_actually_configured(api):
+    # A throttle whose scope has no configured rate gets rate=None, which DRF silently treats as
+    # "unlimited" — the endpoint would look throttled in code and be wide open in production, with
+    # every other test still green. This asserts the wiring itself.
+    from app.throttling import PublicDiscoveryRateThrottle
+
+    assert PublicDiscoveryRateThrottle().rate is not None
+
+
+def test_an_oversized_slug_does_not_produce_an_oversized_cache_key():
+    # The ident is interpolated straight into the cache key, and that cache is the same Redis that
+    # serves as the Celery broker. An unbounded slug would let anonymous traffic write multi-KB keys
+    # into the broker, so the slug is hashed to a fixed width before it gets there.
+    from types import SimpleNamespace
+
+    from app.throttling import PublicDiscoveryRateThrottle
+
+    huge = SimpleNamespace(query_params={"slug": "x" * 5000})
+
+    key = PublicDiscoveryRateThrottle().get_cache_key(huge, None)
+
+    assert len(key) < 100
 
 
 def test_exhausting_discovery_leaves_a_tenants_read_budget_intact(
