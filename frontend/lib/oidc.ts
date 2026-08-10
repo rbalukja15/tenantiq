@@ -31,7 +31,20 @@ export type TokenResponse = {
   expiresIn: number;
 };
 
-export class OidcError extends Error {}
+export class OidcError extends Error {
+  /**
+   * True when the failure was the *provider being unreachable or broken*, rather than a definitive
+   * rejection of the credential. The two must not be treated alike: `invalid_grant` means the
+   * refresh token is genuinely dead and the session is over, while a timeout or a 502 means try
+   * again — destroying the session on the latter logs everyone out during a brief IdP blip.
+   */
+  readonly retryable: boolean;
+
+  constructor(message: string, options: { retryable?: boolean } = {}) {
+    super(message);
+    this.retryable = options.retryable ?? false;
+  }
+}
 
 const DISCOVERY_TIMEOUT_MS = 5000;
 /** Mirrors the backend's PyJWKClient(lifespan=300) so both sides age provider metadata alike. */
@@ -180,16 +193,25 @@ async function postToTokenEndpoint(
   tokenEndpoint: string,
   form: URLSearchParams,
 ): Promise<TokenResponse> {
-  const response = await fetch(tokenEndpoint, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: form,
-    cache: "no-store",
-    signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
-  });
+  let response: Response;
+  try {
+    response = await fetch(tokenEndpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+      cache: "no-store",
+      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+    });
+  } catch (cause) {
+    // The provider is unreachable or timed out — that says nothing about the credential.
+    throw new OidcError(`token endpoint unreachable: ${String(cause)}`, { retryable: true });
+  }
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     const error = String(body.error ?? response.status);
+    if (response.status >= 500) {
+      throw new OidcError(`token endpoint returned ${response.status}`, { retryable: true });
+    }
     if (error === "invalid_client") {
       // The single most likely misconfiguration, so it gets a message that names the fix rather than
       // an opaque failure: TenantIQ has nowhere to put a client secret (see docs/auth-keycloak.md).

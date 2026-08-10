@@ -17,14 +17,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { apiBaseUrl, cookieNames } from "@/lib/config";
 import { isSafeMethod, requireCsrf } from "@/lib/csrf";
 import {
+  clearCookie,
+  csrfCookieOptions,
   deleteSession,
   getSession,
-  needsRefresh,
   readSessionId,
-  updateSession,
   type SessionRecord,
 } from "@/lib/session";
-import { refreshAccessToken } from "@/lib/oidc";
+import { ensureFreshSession } from "@/lib/session-refresh";
 import { buildUpstreamHeaders, filterResponseHeaders } from "@/lib/upstream";
 
 /**
@@ -57,9 +57,11 @@ function isTraversal(segment: string): boolean {
 function sessionExpired(): NextResponse {
   const response = NextResponse.json({ error: "session_expired" }, { status: 401 });
   // Clearing the cookie is what stops a permanently stuck page: the next navigation hits `proxy.ts`,
-  // finds no cookie, and redirects to the login form on its own.
-  response.cookies.delete(cookieNames().session);
-  response.cookies.delete(cookieNames().csrf);
+  // finds no cookie, and redirects to the login form on its own. It has to go through `clearCookie`
+  // — `cookies.delete()` emits no `Secure`, which a browser ignores for a `__Host-` name (see
+  // lib/session.ts), so on https the "clearing" would do nothing and the page really would stick.
+  clearCookie(response, cookieNames().session);
+  clearCookie(response, cookieNames().csrf, csrfCookieOptions());
   return response;
 }
 
@@ -87,26 +89,14 @@ async function handle(
   }
 
   // --- 4. token freshness ------------------------------------------------------------------------
-  if (needsRefresh(session)) {
-    if (!session.refreshToken) return sessionExpired();
-    try {
-      const refreshed = await refreshAccessToken({
-        tokenEndpoint: session.tokenEndpoint,
-        clientId: session.clientId,
-        refreshToken: session.refreshToken,
-      });
-      const patch = {
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken ?? session.refreshToken,
-        expiresAt: Math.floor(Date.now() / 1000) + refreshed.expiresIn,
-      };
-      updateSession(id, patch);
-      session = { ...session, ...patch };
-    } catch {
-      deleteSession(id);
-      return sessionExpired();
-    }
+  const outcome = await ensureFreshSession(id, session);
+  if (outcome.status === "expired") return sessionExpired();
+  if (outcome.status === "unavailable") {
+    // The IdP is unreachable, not the session invalid. 503 keeps the session alive so the client can
+    // retry; answering 401 here would clear the cookie and log everyone out over a transient blip.
+    return NextResponse.json({ error: "refresh_unavailable" }, { status: 503 });
   }
+  session = outcome.record;
 
   // --- 5. request headers: allowlisted, built from scratch (see lib/upstream.ts) -----------------
   const headers = buildUpstreamHeaders(request.headers, session.accessToken);

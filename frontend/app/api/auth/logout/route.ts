@@ -17,7 +17,13 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { appBaseUrl, cookieNames } from "@/lib/config";
 import { requireCsrf } from "@/lib/csrf";
-import { deleteSession, getSession, readSessionId } from "@/lib/session";
+import {
+  clearCookie,
+  csrfCookieOptions,
+  deleteSession,
+  getSession,
+  readSessionId,
+} from "@/lib/session";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!requireCsrf(request)) {
@@ -39,7 +45,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const response = NextResponse.json({ location });
-  response.cookies.delete(cookieNames().session);
-  response.cookies.delete(cookieNames().csrf);
+  clearCookie(response, cookieNames().session);
+  clearCookie(response, cookieNames().csrf, csrfCookieOptions());
   return response;
 }

@@ -77,3 +77,27 @@ describe("TenantHome", () => {
     expect(alert.textContent).not.toMatch(/500/);
   });
 });
+
+describe("TenantHome — caching", () => {
+  it("opts the identity fetch out of the fetch cache", async () => {
+    // An Authorization-bearing GET is not unconditionally excluded from Next's fetch cache, and one
+    // tenant's identity landing in a shared entry is precisely the cross-tenant leak this project
+    // exists to make impossible. MSW cannot observe the `cache` option, so the spy checks the call.
+    mockMe();
+    const original = globalThis.fetch;
+    const seen: RequestInit[] = [];
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(init ?? {});
+      return original(input, init);
+    }) as typeof fetch;
+
+    try {
+      render(await TenantHome({ accessToken: "token-A" }));
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].cache).toBe("no-store");
+  });
+});

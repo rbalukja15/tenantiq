@@ -3,13 +3,15 @@
  *
  * Two invariants shape this handler:
  *
- * 1. **Every exit path clears the transaction cookie** — success, missing cookie, malformed cookie,
- *    state mismatch, failed exchange, mismatched claims. Nothing holding a live PKCE verifier may
- *    outlive the attempt that created it.
+ * 1. **No PKCE verifier outlives the attempt that created it.** Every exit path that *owns* the
+ *    transaction clears it — success, junk cookie, failed exchange, mismatched claims. The single
+ *    exception is a **state mismatch**, where the cookie belongs to a different attempt: tabs share
+ *    one cookie name, so a second login overwrites the first tab's transaction, and clearing it on
+ *    the stale callback would break the live tab as well. Both attempts would then fail, which is
+ *    precisely what the original "always clear" rule caused.
  * 2. **Every failure looks the same**: `303 -> /login?error=retry`. A state mismatch must be
- *    indistinguishable from any other failure, and a uniform bounce also dissolves the multi-tab
- *    race — two tabs share one cookie name, so the loser simply lands back on the login form and
- *    one click succeeds. That is cheaper and more honest than per-attempt cookie names.
+ *    indistinguishable from any other failure, and the uniform bounce means the losing tab lands
+ *    back on the login form where one click succeeds.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -22,7 +24,13 @@ import {
   exchangeCode,
   fetchOpenIdConfiguration,
 } from "@/lib/oidc";
-import { createSession, csrfCookieOptions, sessionCookieOptions } from "@/lib/session";
+import {
+  clearCookie,
+  createSession,
+  csrfCookieOptions,
+  sessionCookieOptions,
+  txCookieOptions,
+} from "@/lib/session";
 
 type Transaction = { state: string; nonce: string; verifier: string; slug: string };
 
@@ -37,10 +45,18 @@ function parseTransaction(raw: string | undefined): Transaction | null {
   }
 }
 
-/** Uniform failure: bounce to the login form, and always drop the transaction cookie. */
-function retry(request: NextRequest): NextResponse {
+/**
+ * Uniform failure: bounce to the login form.
+ *
+ * `clearTx` is not always true, and the exception matters. Tabs share one cookie name, so a second
+ * login overwrites the first tab's transaction. When a stale callback then arrives with a state that
+ * does not match, the cookie it finds belongs to a **live** attempt in another tab — deleting it
+ * would break that one too, so both tabs would fail. On a state mismatch we leave the cookie alone
+ * and let the live attempt finish; the stale one expires on its own within ten minutes.
+ */
+function retry(request: NextRequest, { clearTx }: { clearTx: boolean }): NextResponse {
   const response = NextResponse.redirect(new URL("/login?error=retry", request.url), 303);
-  response.cookies.delete(cookieNames().tx);
+  if (clearTx) clearCookie(response, cookieNames().tx, txCookieOptions());
   return response;
 }
 
@@ -49,14 +65,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get("code");
   const state = request.nextUrl.searchParams.get("state");
 
-  if (!tx || !code || !state || state !== tx.state) return retry(request);
+  // A missing or unparseable cookie is junk worth clearing; a *mismatched* one is somebody else's.
+  if (!tx) return retry(request, { clearTx: true });
+  if (!code || !state || state !== tx.state) return retry(request, { clearTx: false });
 
   try {
     // Re-derive the issuer and client id from Django rather than trusting the cookie: this is the
     // authoritative answer, and it is the reason a planted transaction cookie cannot redirect the
     // token exchange to an attacker's endpoint.
     const tenant = await discoverTenant(tx.slug);
-    if (!tenant) return retry(request);
+    if (!tenant) return retry(request, { clearTx: true });
 
     const provider = await fetchOpenIdConfiguration(tenant.issuer);
     const tokens = await exchangeCode({
@@ -85,11 +103,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     response.cookies.set(cookieNames().session, id, sessionCookieOptions());
     // The readable half of the double-submit pair, minted once per session.
     response.cookies.set(cookieNames().csrf, mintCsrfToken(), csrfCookieOptions());
-    response.cookies.delete(cookieNames().tx);
+    clearCookie(response, cookieNames().tx, txCookieOptions());
     return response;
   } catch {
     // Deliberately swallowed: the reason a login failed is not something to render to whoever
     // triggered it, and every failure mode here is already a reason to start over.
-    return retry(request);
+    return retry(request, { clearTx: true });
   }
 }

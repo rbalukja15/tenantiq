@@ -44,6 +44,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .toLowerCase();
   if (!SLUG.test(slug)) return backToLogin(request, "unknown_tenant");
 
+  // Everything from here can fail on something outside our control — Django down or rate-limiting
+  // us, the IdP unreachable, a malformed discovery document. Without this the user gets Next's
+  // unhandled-error page (a raw 500) instead of the login form, which is both a worse experience and
+  // a way for provider details to reach a browser.
+  try {
+    return await startAuthorization(request, slug);
+  } catch {
+    return backToLogin(request, "unavailable");
+  }
+}
+
+async function startAuthorization(request: NextRequest, slug: string): Promise<NextResponse> {
   const tenant = await discoverTenant(slug);
   if (!tenant) return backToLogin(request, "unknown_tenant");
 

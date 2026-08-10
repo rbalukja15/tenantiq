@@ -66,5 +66,14 @@ export function filterResponseHeaders(incoming: Headers): Headers {
     const value = incoming.get(name);
     if (value !== null) headers.set(name, value);
   }
+  // Every proxied response is per-session tenant data on a *same-origin, cookie-authenticated* URL.
+  // Django sets no Cache-Control on most responses, so without this the response is heuristically
+  // cacheable: a shared cache (a CDN, a corporate proxy, or Next's own Data Cache in a later change)
+  // could store one tenant's `/api/me` under a URL that carries no tenant in it and serve it to
+  // another. `Vary: Cookie` alone would not be enough — it makes correctness depend on a cache
+  // honouring it. Refusing to store the response is the control; the project's whole premise is that
+  // no path can return another tenant's data.
+  headers.set("cache-control", "private, no-store");
+  headers.set("vary", "Cookie");
   return headers;
 }

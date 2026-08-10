@@ -174,13 +174,15 @@ violation passes both lint and `tsc --noEmit` and fails only there).
 
 ## Consequences
 
-- **Easier.** #18 can start: every foundational decision is fixed, and UI behaviour is testable —
-  `TenantBadge` proves a component can render, fetch through a mocked API, and handle its error state.
+- **Easier.** #18 can start: every foundational decision is fixed, and UI behaviour is testable — a
+  component can render, fetch through a mocked API, and handle its error state. (`TenantBadge` proved
+  that here; #18 replaced it with `TenantHome` and a suite that covers the same ground properly.)
   The BFF removes CORS from the problem space entirely and keeps tokens out of reach of XSS.
 - **Harder / accepted costs.** Every API call now has a server-side hop that must be written and kept
-  in sync (including streaming pass-through). **Cookie auth means owning CSRF** — `SameSite=Lax` plus
-  an explicit anti-CSRF token on state-changing routes (#18), a class of bug a bearer-token SPA does
-  not have. The discovery endpoint is a deliberate, minimal public surface and a slug-enumeration
+  in sync (including streaming pass-through). **Cookie auth means owning CSRF** — `SameSite=Lax`, an
+  `Origin` equality check on every state-changing request, and a double-submit token behind it (#18):
+  a class of bug a bearer-token SPA does not have. The discovery endpoint is a deliberate, minimal
+  public surface and a slug-enumeration
   oracle. Choosing no client cache library means some hand-rolled loading/error state, revisited if it
   gets repetitive. Next 16 and React 19 are recent majors, so breaking-change churn is possible —
   mitigated by lint, typecheck, tests, **and the build** all running in CI (the build step was added

@@ -2,6 +2,7 @@ const MESSAGES: Record<string, string> = {
   retry: "That sign-in attempt could not be completed. Please try again.",
   unknown_tenant: "We could not find that workspace. Check the name and try again.",
   session_expired: "Your session has ended. Please sign in again.",
+  unavailable: "Sign-in is temporarily unavailable. Please try again in a moment.",
 };
 
 /**

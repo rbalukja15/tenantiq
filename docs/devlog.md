@@ -648,7 +648,49 @@ is idempotent), and no `next`/`returnTo` parameter — not adding one removes th
 outright. Back-channel logout is deferred and bounded: an IdP-side termination takes effect at the API
 when the access token expires.
 
-The one thing I could not verify without a live Keycloak is that the `globalThis`-pinned session store
-is genuinely one instance across the callback handler, the proxy handler and the Server Component
-under `make dev`. The pin exists precisely so separate Next bundles cannot produce separate maps, but
-it is worth a real login before anyone trusts it in anger.
+Then a second adversarial review, this time over the *implementation* — 26 raised, **23 confirmed**,
+and it was worth every token. The two worst were things all my green tests agreed were fine:
+
+- **Every cookie deletion was a no-op in production.** `response.cookies.delete(name)` emits
+  `Set-Cookie: name=; Path=/; Expires=Thu, 01 Jan 1970` — no `Secure` — and RFC 6265bis requires a
+  browser to *ignore* a `__Host-`-prefixed cookie without it. The prefix is applied only on https, and
+  the tests run on http, so sign-out "worked" locally while leaving the session cookie in the jar for
+  eight hours on a real deployment. Reading Next's vendored cookie code made it worse: `delete(name,
+  options)` silently discards `options` when the first argument is a string, so there is no escape
+  hatch — hence `clearCookie`, which re-sets the cookie with its real flags and a zero lifetime. Four
+  of the five review lenses found this independently, which is usually a sign it is the real one.
+- **The app logged everyone out about five minutes after login.** Token refresh lived only in the API
+  proxy, and the one page the app actually renders talks to Django directly — so a reload after
+  Keycloak's default five-minute access-token lifespan sent an expired bearer, got a 401, and bounced
+  the user to the login form while the BFF sat on a perfectly good refresh token. Refresh is now a
+  shared `ensureFreshSession` used by both paths, and it distinguishes `invalid_grant` (the session
+  really is over) from an unreachable IdP (retryable, 503, session kept) — collapsing those two would
+  have signed out every user during a brief provider blip.
+- **`make dev` could not complete a login at all.** The documented issuer was
+  `http://localhost:8080/realms/acme`, which the *frontend container* cannot reach — inside a
+  container, `localhost` is the container. The issuer has to be one string that means the same
+  Keycloak to the browser, the Next server and Django, so it is `http://keycloak:8080/...` now, with
+  a one-line `/etc/hosts` entry for the browser and `KC_HOSTNAME` pinned in compose so `start-dev`
+  stops deriving a different issuer per request Host.
+- Two of my "proofs" were not. `/tiq_session=.*Max-Age=0|1970/` parses as
+  `(tiq_session=.*Max-Age=0)|(1970)`, so the `1970` in *any* cookie's expiry satisfied it — two
+  assertions that the session cookie was cleared passed while it never was. And nothing checked the
+  flags the callback route actually applies, so the suite would have accepted a session cookie minted
+  with no `HttpOnly` at all. Both are now exact assertions on the literal `Set-Cookie`.
+- Proxied responses carried no `Cache-Control`. Django sets none on most responses, which leaves
+  per-tenant data on a cookie-authenticated URL heuristically cacheable by any shared cache — so
+  every proxied response is now `private, no-store` + `Vary: Cookie` (T12/T13).
+- Smaller but real: login had no error handling, so a discovery or IdP failure surfaced as a raw 500
+  instead of the login form; orphaned session records (live refresh tokens) were never reclaimed; and
+  clearing the transaction cookie on a *state mismatch* destroyed a concurrent tab's live login,
+  making both tabs fail — the one case that must not clear.
+
+`LogoutButton`, the browser half of the CSRF scheme, had no test at all; it has four now. Six more
+mutations, all caught.
+
+Two things I have **not** verified, stated plainly rather than implied: no login has been run against
+a live Keycloak, so the `make dev` fix above is reasoned from container networking and Keycloak's
+hostname behaviour rather than observed; and the `globalThis`-pinned session store is still unproven
+as one instance across the callback handler, the proxy handler and the Server Component under a real
+`make dev`. The pin exists precisely so separate Next bundles cannot produce separate maps, but it is
+worth a real login before anyone trusts it in anger.

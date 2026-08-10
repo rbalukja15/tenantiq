@@ -66,13 +66,32 @@ export function getSession(id: string | undefined): SessionRecord | undefined {
   if (!id) return undefined;
   const record = store().get(id);
   if (!record) return undefined;
-  // Lazy expiry: there is no sweeper, so a record is checked when it is used. An absolute cap
-  // (rather than only the access token's expiry) bounds how long a stolen id stays useful.
+  // Lazy expiry: an absolute cap (rather than only the access token's expiry) bounds how long a
+  // stolen id stays useful.
   if (Date.now() - record.createdAt > SESSION_TTL_MS) {
     store().delete(id);
     return undefined;
   }
+  sweepExpired();
   return record;
+}
+
+/**
+ * Drop every record past its absolute lifetime.
+ *
+ * Checking expiry only on lookup is not enough on its own: a session whose cookie the user simply
+ * discards — closing the browser, clearing cookies, or any login that replaces the cookie without
+ * ending the old session — is never looked up again, so its record (holding a **live refresh token**)
+ * would sit in the map until the process restarts. Sweeping on access keeps the map proportional to
+ * live sessions without a timer, which matters because a timer would keep the process alive.
+ *
+ * Amortised: the map holds one small object per active session, so a full pass is cheap at this
+ * scale. If it ever is not, that is the point at which the store belongs in Redis with a TTL.
+ */
+function sweepExpired(now = Date.now()): void {
+  for (const [id, record] of store()) {
+    if (now - record.createdAt > SESSION_TTL_MS) store().delete(id);
+  }
 }
 
 export function updateSession(id: string, patch: Partial<SessionRecord>): void {
@@ -130,4 +149,31 @@ export function txCookieOptions(): CookieOptions {
 
 export function readSessionId(request: NextRequest): string | undefined {
   return request.cookies.get(cookieNames().session)?.value;
+}
+
+/** The bit of `NextResponse` this module needs, so the helper stays trivially testable. */
+type CookieWriter = { cookies: { set: (name: string, value: string, options: object) => unknown } };
+
+/**
+ * Expire a cookie.
+ *
+ * **Never use `response.cookies.delete(name)`.** Next's `ResponseCookies.delete` is
+ * `set({...options, name, value: "", expires: new Date(0)})` — and when the first argument is a
+ * string it drops the options argument entirely, so there is not even an escape hatch. The header it
+ * emits carries no `Secure`, and RFC 6265bis §4.1.3.2 requires a browser to **ignore** a
+ * `Set-Cookie` for a `__Host-`-prefixed name that lacks it.
+ *
+ * The result is a deletion that silently does nothing in exactly the deployment where the prefix is
+ * applied — https — while every local test passes, because tests run on plain http where no prefix
+ * is used. Sign-out would leave the session cookie in the jar for its full eight hours.
+ *
+ * Re-setting the cookie with its real options plus a zero lifetime keeps `Secure` (and `HttpOnly`,
+ * `SameSite`, `Path`) on the clearing header, which is what makes the browser accept it.
+ */
+export function clearCookie(
+  response: CookieWriter,
+  name: string,
+  options: CookieOptions = sessionCookieOptions(),
+): void {
+  response.cookies.set(name, "", { ...options, maxAge: 0, expires: new Date(0) });
 }

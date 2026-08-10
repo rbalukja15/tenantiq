@@ -97,13 +97,14 @@ describe("filterResponseHeaders", () => {
     });
   }
 
-  it("returns exactly the allowlist", () => {
+  it("returns exactly the allowlist, plus the caching headers we add ourselves", () => {
     const headers = filterResponseHeaders(upstreamResponseHeaders());
 
     expect([...headers].map(([name]) => name).sort()).toEqual([
       "cache-control",
       "content-type",
       "retry-after",
+      "vary",
       "x-accel-buffering",
     ]);
   });
@@ -129,5 +130,25 @@ describe("filterResponseHeaders", () => {
 
   it("keeps the SSE anti-buffering header that #19 depends on", () => {
     expect(filterResponseHeaders(upstreamResponseHeaders()).get("x-accel-buffering")).toBe("no");
+  });
+});
+
+describe("filterResponseHeaders — caching", () => {
+  it("marks every proxied response private and uncacheable", () => {
+    // Each response is per-session tenant data on a same-origin, cookie-authenticated URL, and
+    // Django sets no Cache-Control on most of them — which leaves the response heuristically
+    // cacheable. A shared cache could then store one tenant's /api/me under a URL that names no
+    // tenant and hand it to another. Refusing storage is the control; Vary alone would make
+    // correctness depend on an intermediary honouring it.
+    const headers = filterResponseHeaders(new Headers({ "content-type": "application/json" }));
+
+    expect(headers.get("cache-control")).toBe("private, no-store");
+    expect(headers.get("vary")).toBe("Cookie");
+  });
+
+  it("overrides a permissive Cache-Control from the API", () => {
+    const headers = filterResponseHeaders(new Headers({ "cache-control": "public, max-age=3600" }));
+
+    expect(headers.get("cache-control")).toBe("private, no-store");
   });
 });

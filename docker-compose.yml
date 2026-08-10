@@ -130,6 +130,14 @@ services:
     ports: ["3000:3000"]
 
   # Dev-only identity provider. Start with: docker compose --profile dev up keycloak
+  #
+  # The issuer has to be ONE string that resolves to the same Keycloak from three places: the browser
+  # (which is redirected to it), the Next server (which fetches its metadata and exchanges the code),
+  # and Django (which fetches JWKS and matches the `iss` claim). `http://localhost:8080` cannot be
+  # that string — inside a container `localhost` is the container itself — so the hostname is
+  # `keycloak` everywhere, and the developer adds one line to /etc/hosts so the *browser* resolves it
+  # too (see docs/auth-keycloak.md). KC_HOSTNAME pins the advertised issuer, which `start-dev` would
+  # otherwise derive from each request's Host header — the usual cause of an issuer mismatch.
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     profiles: ["dev"]
@@ -137,6 +145,9 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HOSTNAME: ${KEYCLOAK_ISSUER_HOST:-http://keycloak:8080}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
     ports: ["8080:8080"]
 
 volumes:

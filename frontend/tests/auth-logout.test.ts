@@ -5,7 +5,7 @@ import { POST } from "@/app/api/auth/logout/route";
 import { createSession, getSession, type SessionRecord } from "@/lib/session";
 import { resetSessionsForTest } from "@/lib/session";
 
-import { APP_ORIGIN } from "./env";
+import { APP_ORIGIN, isCleared, withEnv } from "./env";
 
 const ISSUER = "https://idp.test/realms/acme";
 
@@ -68,9 +68,8 @@ describe("POST /api/auth/logout", () => {
   it("clears both cookies", async () => {
     const response = await POST(logoutRequest({ id: seedSession() }));
 
-    const cookies = response.headers.getSetCookie();
-    expect(cookies.some((c) => c.startsWith("tiq_session=") && /Max-Age=0|1970/.test(c))).toBe(true);
-    expect(cookies.some((c) => c.startsWith("tiq_csrf=") && /Max-Age=0|1970/.test(c))).toBe(true);
+    expect(isCleared(response, "tiq_session")).toBe(true);
+    expect(isCleared(response, "tiq_csrf")).toBe(true);
   });
 
   it("falls back to the login page when the provider publishes no end-session endpoint", async () => {
@@ -105,5 +104,43 @@ describe("POST /api/auth/logout", () => {
 
     expect(response.status).toBe(403);
     expect(getSession(id)).toBeDefined();
+  });
+});
+
+describe("POST /api/auth/logout — https", () => {
+  it("emits clearing cookies the browser will actually accept", async () => {
+    // The bug this pins: `response.cookies.delete(name)` emits no `Secure`, and RFC 6265bis makes a
+    // browser IGNORE a `__Host-`-prefixed Set-Cookie without it. So on https — the only deployment
+    // where the prefix is applied — signing out left the session cookie in the jar for its full
+    // eight hours, while every local test passed because tests run on plain http.
+    await withEnv({ APP_BASE_URL: "https://app.example" }, async () => {
+      const { POST: securedPost } = await import("@/app/api/auth/logout/route");
+      const { createSession } = await import("@/lib/session");
+      const id = createSession({
+        accessToken: "a",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        tokenEndpoint: `${ISSUER}/protocol/openid-connect/token`,
+        issuer: ISSUER,
+        clientId: "tenantiq-acme",
+        tenantSlug: "acme",
+        createdAt: Date.now(),
+      });
+      const headers = new Headers({
+        origin: "https://app.example",
+        "x-csrf-token": "tok",
+        cookie: `__Host-tiq_session=${id}; __Host-tiq_csrf=tok`,
+      });
+
+      const response = await securedPost(
+        new NextRequest("https://app.example/api/auth/logout", { method: "POST", headers }),
+      );
+
+      for (const name of ["__Host-tiq_session", "__Host-tiq_csrf"]) {
+        const line = response.headers.getSetCookie().find((c) => c.startsWith(`${name}=`));
+        expect(line, `no clearing Set-Cookie for ${name}`).toBeDefined();
+        expect(line).toMatch(/Secure/);
+        expect(line).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/);
+      }
+    });
   });
 });

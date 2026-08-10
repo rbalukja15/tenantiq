@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GET, POST } from "@/app/api/[...path]/route";
 import { createSession, getSession, resetSessionsForTest, type SessionRecord } from "@/lib/session";
 
-import { API_ORIGIN, APP_ORIGIN } from "./env";
+import { API_ORIGIN, APP_ORIGIN, isCleared } from "./env";
 import { server } from "./msw";
 
 const ISSUER = "https://idp.test/realms/acme";
@@ -134,9 +134,8 @@ describe("proxy — session handling", () => {
 
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "session_expired" });
-    expect(response.headers.getSetCookie().some((c) => /tiq_session=.*Max-Age=0|1970/.test(c))).toBe(
-      true,
-    );
+    expect(isCleared(response, "tiq_session")).toBe(true);
+    expect(isCleared(response, "tiq_csrf")).toBe(true);
   });
 
   it("ends the session when Django rejects the token, so the next navigation redirects", async () => {
@@ -150,9 +149,7 @@ describe("proxy — session handling", () => {
 
     expect(response.status).toBe(401);
     expect(getSession(id)).toBeUndefined();
-    expect(response.headers.getSetCookie().some((c) => /tiq_session=.*Max-Age=0|1970/.test(c))).toBe(
-      true,
-    );
+    expect(isCleared(response, "tiq_session")).toBe(true);
   });
 });
 
@@ -354,5 +351,34 @@ describe("proxy — token refresh", () => {
 
     expect(response.status).toBe(401);
     expect(getSession(id)).toBeUndefined();
+  });
+});
+
+describe("proxy — a briefly unreachable IdP", () => {
+  it("answers 503 and keeps the session, rather than logging the user out", async () => {
+    // A transient refresh failure must not be indistinguishable from a dead credential: answering
+    // 401 here would clear the cookie and sign every user out over an IdP blip they never saw.
+    server.use(http.post(TOKEN_ENDPOINT, () => HttpResponse.error()));
+    const id = seedSession({ expiresAt: Math.floor(Date.now() / 1000) - 1 });
+    const [request, context] = proxyCall(["me"], { id });
+
+    const response = await GET(request, context);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "refresh_unavailable" });
+    expect(getSession(id)).toBeDefined();
+    expect(isCleared(response, "tiq_session")).toBe(false);
+  });
+});
+
+describe("proxy — caching", () => {
+  it("marks proxied tenant data uncacheable", async () => {
+    mockUpstream();
+    const [request, context] = proxyCall(["me"], { id: seedSession() });
+
+    const response = await GET(request, context);
+
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie");
   });
 });

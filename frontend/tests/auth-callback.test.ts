@@ -6,7 +6,7 @@ import { GET } from "@/app/api/auth/callback/route";
 import { getSession, resetSessionsForTest } from "@/lib/session";
 import { resetDiscoveryCacheForTest } from "@/lib/oidc";
 
-import { API_ORIGIN, APP_ORIGIN } from "./env";
+import { API_ORIGIN, APP_ORIGIN, isCleared, setCookie, withEnv } from "./env";
 import { server } from "./msw";
 
 const ISSUER = "https://idp.test/realms/acme";
@@ -156,18 +156,35 @@ describe("GET /api/auth/callback", () => {
   });
 
   it.each([
-    ["the transaction cookie is missing", { tx: null as null }],
-    ["the transaction cookie is malformed", { tx: "not-json" }],
-    ["the state does not match", { state: "someone-elses-state" }],
-  ])("bounces back to the login form when %s, and clears the transaction", async (_label, opts) => {
-    // No MSW handlers: each of these must fail before any network call happens.
-    const response = await GET(callback(opts));
+    ["the transaction cookie is missing", { tx: null as null }, true],
+    ["the transaction cookie is malformed", { tx: "not-json" }, true],
+    // A mismatched state is the one case that must NOT clear: the cookie belongs to a different,
+    // possibly live attempt (see below).
+    ["the state does not match", { state: "someone-elses-state" }, false],
+  ])(
+    "bounces back to the login form when %s, creating no session",
+    async (_label, opts, clearsTx) => {
+      // No MSW handlers: each of these must fail before any network call happens.
+      const response = await GET(callback(opts));
 
-    expect(response.status).toBe(303);
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toContain("/login?error=retry");
+      expect(isCleared(response, "tiq_tx")).toBe(clearsTx);
+      expect(response.headers.getSetCookie().some((c) => c.startsWith("tiq_session="))).toBe(false);
+    },
+  );
+
+  it("leaves a concurrent tab's transaction alone when a stale callback arrives", async () => {
+    // Tabs share one cookie name, so opening a second login overwrites the first tab's transaction.
+    // When the first tab's callback then comes back with a stale state, clearing the cookie would
+    // destroy the *live* second attempt too — and both tabs would fail. The stale attempt simply
+    // bounces to the login form; the live one is untouched and expires on its own within 10 minutes.
+    const live = { state: "tab-two", nonce: "n-2", verifier: "v-2", slug: "acme" };
+
+    const response = await GET(callback({ tx: live, state: "tab-one-stale" }));
+
     expect(response.headers.get("location")).toContain("/login?error=retry");
-    const cleared = response.headers.getSetCookie().find((c) => c.startsWith("tiq_tx="));
-    expect(cleared).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/);
-    expect(response.headers.getSetCookie().some((c) => c.startsWith("tiq_session="))).toBe(false);
+    expect(setCookie(response, "tiq_tx")).toBeUndefined(); // not touched at all
   });
 
   it("clears the transaction and creates no session when the exchange fails", async () => {
@@ -177,9 +194,7 @@ describe("GET /api/auth/callback", () => {
     const response = await GET(callback());
 
     expect(response.headers.get("location")).toContain("/login?error=retry");
-    expect(response.headers.getSetCookie().find((c) => c.startsWith("tiq_tx="))).toMatch(
-      /Max-Age=0|Expires=Thu, 01 Jan 1970/,
-    );
+    expect(isCleared(response, "tiq_tx")).toBe(true);
     expect(response.headers.getSetCookie().some((c) => c.startsWith("tiq_session="))).toBe(false);
   });
 
@@ -191,5 +206,68 @@ describe("GET /api/auth/callback", () => {
 
     expect(response.headers.get("location")).toContain("/login?error=retry");
     expect(response.headers.getSetCookie().some((c) => c.startsWith("tiq_session="))).toBe(false);
+  });
+});
+
+describe("GET /api/auth/callback — cookie flags", () => {
+  it("mints the session cookie HttpOnly, SameSite=Lax, Path=/", async () => {
+    // Asserting the flags the *route* applies, not just those `sessionCookieOptions()` returns:
+    // the whole suite previously passed with the callback minting a flagless cookie, because
+    // nothing checked what this handler actually emitted.
+    mockDiscovery();
+    mockTokenEndpoint();
+
+    const line = setCookie(await GET(callback()), "tiq_session") as string;
+
+    expect(line).toMatch(/HttpOnly/);
+    expect(line).toMatch(/SameSite=Lax/i);
+    expect(line).toMatch(/Path=\/(;|$)/);
+  });
+
+  it("marks both cookies Secure and __Host- prefixed on an https deployment", async () => {
+    await withEnv({ APP_BASE_URL: "https://app.example" }, async () => {
+      const { GET: securedGet } = await import("@/app/api/auth/callback/route");
+      mockDiscovery();
+      mockTokenEndpoint();
+      const headers = new Headers({
+        cookie: `__Host-tiq_tx=${encodeURIComponent(
+          JSON.stringify({ state: "s-1", nonce: "n-1", verifier: "v-1", slug: "acme" }),
+        )}`,
+      });
+      const url = new URL("https://app.example/api/auth/callback");
+      url.searchParams.set("code", "auth-code");
+      url.searchParams.set("state", "s-1");
+
+      const response = await securedGet(new NextRequest(url, { headers }));
+
+      for (const name of ["__Host-tiq_session", "__Host-tiq_csrf"]) {
+        const line = response.headers.getSetCookie().find((c) => c.startsWith(`${name}=`)) as string;
+        expect(line, `missing ${name}`).toBeDefined();
+        expect(line).toMatch(/Secure/);
+        // __Host- forbids Domain; that prohibition is the whole reason for the prefix.
+        expect(line).not.toMatch(/Domain=/i);
+      }
+    });
+  });
+
+  it("clears the transaction cookie with Secure on https, so the browser accepts the deletion", async () => {
+    // RFC 6265bis makes a browser ignore a `__Host-` Set-Cookie without Secure — which is exactly
+    // what `response.cookies.delete()` emits. That made every deletion a silent no-op in production.
+    await withEnv({ APP_BASE_URL: "https://app.example" }, async () => {
+      const { GET: securedGet } = await import("@/app/api/auth/callback/route");
+      const url = new URL("https://app.example/api/auth/callback");
+      url.searchParams.set("code", "c");
+      url.searchParams.set("state", "s-1");
+
+      const response = await securedGet(
+        new NextRequest(url, { headers: new Headers({ cookie: "__Host-tiq_tx=not-json" }) }),
+      );
+
+      const line = response.headers
+        .getSetCookie()
+        .find((c) => c.startsWith("__Host-tiq_tx=")) as string;
+      expect(line).toMatch(/Secure/);
+      expect(line).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/);
+    });
   });
 });

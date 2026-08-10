@@ -6,11 +6,16 @@ same-origin request to a Next route handler which attaches the bearer token serv
 
 ```bash
 npm install
+cp .env.example .env.local   # Next reads this, NOT the repo-root .env
 npm run dev
 ```
 
 Requires **Node ≥ 22.22.2** (`engine-strict` is on, so an older runtime fails at install rather than
 surfacing later as an opaque module error).
+
+Skipping the `.env.local` step compiles fine and then 500s on the first request: the variables below
+are validated when they are first *used*, not at import (see below for why). `docker compose up`
+needs no such file — the frontend service sets both variables itself.
 
 ## Environment
 

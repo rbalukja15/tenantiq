@@ -16,8 +16,18 @@ import { cookies } from "next/headers";
 import { cookieNames } from "@/lib/config";
 import { getSession, type SessionRecord } from "@/lib/session";
 
-/** Resolve the caller's session inside a Server Component. */
-export async function getSessionFromCookieStore(): Promise<SessionRecord | undefined> {
+/**
+ * Resolve the caller's session inside a Server Component.
+ *
+ * Returns the **id alongside the record**: refreshing or ending a session needs the id, and a
+ * Server Component has no other way to obtain it.
+ */
+export async function getSessionFromCookieStore(): Promise<
+  { id: string; record: SessionRecord } | undefined
+> {
   const store = await cookies();
-  return getSession(store.get(cookieNames().session)?.value);
+  const id = store.get(cookieNames().session)?.value;
+  if (!id) return undefined;
+  const record = getSession(id);
+  return record ? { id, record } : undefined;
 }

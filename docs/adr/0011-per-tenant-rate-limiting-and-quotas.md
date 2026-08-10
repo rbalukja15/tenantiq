@@ -82,10 +82,19 @@ suite stays hermetic, and an autouse fixture clears it between tests so counts c
 - **A sliding-log daily quota** (a `1000/day` `SimpleRateThrottle`) — it stores up to N timestamps
   per tenant and has no meaningful "resets at midnight". A fixed calendar-window counter is cheaper
   and gives an honest reset time for `Retry-After`.
-- **Throttling the unauthenticated path at the app layer** — DRF rejects an unauthenticated request
-  with 401 at the permission layer *before* throttles run, so an app-level anon throttle would never
-  fire. Bounding unauthenticated request cost (the "each costs a DB lookup" concern in #49) belongs at
-  the edge/WAF and lands with the public deploy (#25).
+- **Throttling the unauthenticated path at the app layer** — at the time of this ADR every endpoint
+  required authentication, and DRF rejects an unauthenticated request with 401 at the permission
+  layer *before* throttles run, so an app-level anon throttle would never have fired. Bounding
+  unauthenticated request cost (the "each costs a DB lookup" concern in #49) was left to the
+  edge/WAF with the public deploy (#25).
+
+  **Superseded in part by #18.** The BFF (ADR-0013 §2) introduced the project's first genuinely
+  public endpoint, `GET /api/tenants/discovery`, which sets `permission_classes = [AllowAny]` — so
+  its throttles *do* run, and the reasoning above no longer applies to it. It is bounded by
+  `PublicDiscoveryRateThrottle` on its own `discovery` scope, keyed on a hash of the requested
+  **slug**. Not on the client: behind the BFF every such request reaches Django from the Next server,
+  so a client key would be a single global bucket in which one flood denies login to every tenant.
+  Per-*client* limiting for that endpoint remains an edge concern, exactly as this ADR says.
 
 ## Consequences
 

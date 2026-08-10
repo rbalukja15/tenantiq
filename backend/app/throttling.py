@@ -1,8 +1,13 @@
-"""Per-tenant rate limiting & quotas (#49, ADR-0011).
+"""Rate limiting & quotas (#49, ADR-0011; extended by #18).
 
-Two families of throttle, both keyed on the **tenant** (never the user, never globally), so tenant
-isolation — the project's core invariant — extends to capacity: one tenant hammering an endpoint can
-exhaust only its *own* budget, never another tenant's.
+Two families of throttle for *authenticated* traffic, both keyed on the **tenant** (never the user,
+never globally), so tenant isolation — the project's core invariant — extends to capacity: one tenant
+hammering an endpoint can exhaust only its *own* budget, never another tenant's.
+
+Plus one throttle for the single **unauthenticated** endpoint (tenant discovery, #18), which has no
+tenant to key on and is bucketed per requested slug instead — see
+:class:`PublicDiscoveryRateThrottle`. The rule below about throttles never running for anonymous
+requests holds for every endpoint *except* that one, which is deliberately ``AllowAny``.
 
 - **Rate throttles** (:class:`TenantQueryRateThrottle`, ``…Upload…``, ``…Read…``) bound *burst*: a
   sliding-window request rate per tenant per scope, so query (LLM-backed, expensive) / uploads /
