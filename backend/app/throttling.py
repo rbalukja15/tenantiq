@@ -1,8 +1,13 @@
-"""Per-tenant rate limiting & quotas (#49, ADR-0011).
+"""Rate limiting & quotas (#49, ADR-0011; extended by #18).
 
-Two families of throttle, both keyed on the **tenant** (never the user, never globally), so tenant
-isolation — the project's core invariant — extends to capacity: one tenant hammering an endpoint can
-exhaust only its *own* budget, never another tenant's.
+Two families of throttle for *authenticated* traffic, both keyed on the **tenant** (never the user,
+never globally), so tenant isolation — the project's core invariant — extends to capacity: one tenant
+hammering an endpoint can exhaust only its *own* budget, never another tenant's.
+
+Plus one throttle for the single **unauthenticated** endpoint (tenant discovery, #18), which has no
+tenant to key on and is bucketed per requested slug instead — see
+:class:`PublicDiscoveryRateThrottle`. The rule below about throttles never running for anonymous
+requests holds for every endpoint *except* that one, which is deliberately ``AllowAny``.
 
 - **Rate throttles** (:class:`TenantQueryRateThrottle`, ``…Upload…``, ``…Read…``) bound *burst*: a
   sliding-window request rate per tenant per scope, so query (LLM-backed, expensive) / uploads /
@@ -31,6 +36,7 @@ request is already rejected with 401 before any throttle sees it. When a throttl
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timedelta
 
@@ -62,14 +68,11 @@ def _tenant_ident(request) -> str | None:
 # --- rate throttles (sliding window, per tenant) --------------------------------------------------
 
 
-class _TenantScopedRateThrottle(SimpleRateThrottle):
-    """A :class:`SimpleRateThrottle` bucketed by tenant + scope rather than by user or IP.
+class _ConfiguredRateThrottle(SimpleRateThrottle):
+    """Behaviour shared by every rate throttle here, independent of what the bucket is keyed on.
 
-    Three differences from the DRF base:
+    Two differences from the DRF base:
 
-    - :meth:`get_cache_key` keys on ``request.tenant.id``, so the bucket is the tenant, not the
-      individual user — a tenant's whole workforce shares (and is bounded by) one budget, and no
-      tenant can reach into another's bucket.
     - :meth:`get_rate` reads the configured rate *fresh* from DRF's settings on each instantiation.
       ``SimpleRateThrottle`` binds ``THROTTLE_RATES`` at import time, which would make the rate
       un-overridable at runtime (and in tests). Reading ``api_settings`` fresh keeps the rate true
@@ -81,18 +84,27 @@ class _TenantScopedRateThrottle(SimpleRateThrottle):
     def get_rate(self) -> str | None:
         return api_settings.DEFAULT_THROTTLE_RATES.get(self.scope)
 
-    def get_cache_key(self, request, view) -> str | None:
-        ident = _tenant_ident(request)
-        if ident is None:
-            return None  # no tenant -> not rate-limited here (the 401 already happened)
-        return self.cache_format % {"scope": self.scope, "ident": ident}
-
     def allow_request(self, request, view) -> bool:
         try:
             return super().allow_request(request, view)
         except _CACHE_UNAVAILABLE:  # cache down -> fail open, don't take the API down
             logger.warning("throttle cache unavailable; failing open for scope=%s", self.scope)
             return True
+
+
+class _TenantScopedRateThrottle(_ConfiguredRateThrottle):
+    """A rate throttle bucketed by tenant + scope rather than by user or IP.
+
+    :meth:`get_cache_key` keys on ``request.tenant.id``, so the bucket is the tenant, not the
+    individual user — a tenant's whole workforce shares (and is bounded by) one budget, and no
+    tenant can reach into another's bucket.
+    """
+
+    def get_cache_key(self, request, view) -> str | None:
+        ident = _tenant_ident(request)
+        if ident is None:
+            return None  # no tenant -> not rate-limited here (the 401 already happened)
+        return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
 class TenantQueryRateThrottle(_TenantScopedRateThrottle):
@@ -111,6 +123,45 @@ class TenantReadRateThrottle(_TenantScopedRateThrottle):
     """Burst limit for cheap read endpoints (listing documents, identity)."""
 
     scope = "read"
+
+
+# --- public (pre-authentication) rate throttle ----------------------------------------------------
+
+
+class PublicDiscoveryRateThrottle(_ConfiguredRateThrottle):
+    """Burst limit for the unauthenticated tenant-discovery endpoint (#18, ADR-0013 §2).
+
+    Discovery is the one route a caller reaches *before* it has a token, so there is no tenant to key
+    on — and the tenant-scoped throttles above deliberately return a ``None`` cache key in that case,
+    which DRF treats as "do not throttle". Reusing one of them here would have left the project's
+    only public endpoint completely unbounded.
+
+    **The bucket is the requested slug, not the client.** Keying on the client IP looks like the
+    obvious choice and is wrong here: under the BFF (ADR-0013 §1) the browser never calls this
+    endpoint — the Next server does, on the browser's behalf — so Django sees a single
+    ``REMOTE_ADDR`` for *every* discovery request in production. An IP key would therefore be one
+    global bucket, and a single anonymous flood would deny login to every tenant at once. Keying on
+    the slug keeps the blast radius to the tenant actually under attack, which is the same isolation
+    promise the rest of the system makes: one tenant's traffic can never degrade another's.
+
+    Two honest limits. An attacker who *rotates* slugs spreads across buckets and is not bounded by
+    this at all — accepted, because ADR-0013 already accepts slug enumeration and this is a single
+    indexed row lookup returning public values. And a determined flood against one slug denies that
+    tenant's logins; per-client limiting is not expressible in Django under a BFF and belongs at the
+    edge if it is ever wanted.
+
+    The slug is hashed to bound the **key size**, not to obfuscate it: the view does not length-limit
+    the raw query parameter, and the ident is interpolated straight into the cache key — which lands
+    in the same Redis that serves as the Celery broker. Hashing keeps an oversized parameter from
+    turning anonymous traffic into broker memory pressure.
+    """
+
+    scope = "discovery"
+
+    def get_cache_key(self, request, view) -> str | None:
+        slug = (request.query_params.get("slug") or "").strip().lower()
+        ident = hashlib.sha256(slug.encode()).hexdigest()[:32]
+        return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
 # --- quota throttles (fixed calendar window, per tenant) ------------------------------------------

@@ -21,6 +21,15 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     include: ["{app,tests,lib,components}/**/*.test.{ts,tsx}"],
     css: false,
+    // Set here rather than in a setup file because `lib/config.ts` memoizes on first call: these
+    // must be in place before any module is imported, or the first suite to touch config would fix
+    // the values for every later one. The origins are deliberately *different* from each other and
+    // from jsdom's own `localhost:3000`, so a request that should go to the API can never
+    // accidentally match a handler registered for the app (#18).
+    env: {
+      API_BASE_URL: "http://backend:8000",
+      APP_BASE_URL: "http://localhost:3000",
+    },
   },
   resolve: {
     // fileURLToPath, not URL.pathname: the latter is percent-encoded, so a checkout path containing

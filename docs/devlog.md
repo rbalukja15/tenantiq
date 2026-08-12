@@ -589,3 +589,108 @@ lint && typecheck && test` still passes without it.
 Verified on Node 22.23.2, `npm ci` from a clean tree: `npm run lint`, `npm run typecheck`, `npm test`
 (**3 passed**), `npm run format`, and `npm run build` all green. No backend changes — the discovery
 endpoint itself is #18's work.
+
+## 2026-08-10 — M4 #18: app shell + auth (the BFF, end to end)
+The issue ADR-0013 was written to unblock. Everything that ADR deferred lands here: the public
+discovery endpoint, the OIDC login/logout flow, the session cookie, the proxy, and CSRF.
+
+I ran an adversarial design review **before** writing any auth code — five lenses (OAuth/OIDC,
+cookies/CSRF, Next 16 mechanics, proxy/SSRF, testability), every finding independently verified.
+36 raised, **26 confirmed**, and it changed nine substantive decisions. Three of them were mine from
+ADR-0013, so the ADR carries three explicit corrections rather than being quietly rewritten:
+
+1. **The discovery throttle was wrong twice.** ADR-0013 said "rate-limited on the existing `read`
+   scope". That would have done nothing: the tenant-keyed throttles return a `None` cache key when
+   there is no tenant, and DRF treats that as *do not throttle* — the project's only public endpoint,
+   entirely unbounded. I caught that myself and replaced it with an IP key. **That was also wrong**,
+   and the review caught it: under a BFF the browser never calls this endpoint, the Next server does,
+   so Django sees one `REMOTE_ADDR` for every request. An IP key is one *global* bucket, and a single
+   anonymous flood denies login to every tenant at once. It is keyed on the requested slug now, so
+   the blast radius is the tenant actually under attack. An attacker rotating slugs is unbounded by
+   it; that is stated rather than hidden.
+2. **The session cookie could not hold the token.** Browsers cap a cookie at ~4 KB and *silently
+   drop* an oversized `Set-Cookie` — so a realm with a few role claims, plus refresh and ID tokens,
+   gives a login that succeeds server-side and then loops invisibly, on that tenant only, in
+   production only. The cookie is an opaque id now; the tokens stay server-side.
+3. **The double-submit CSRF token is not the control.** It proves only that the caller could *read*
+   the cookie, and cookie write scope is same-**site**, not same-**origin**: a sibling subdomain — or
+   in dev any other port on `localhost`, since cookies ignore ports — can plant both halves. `Origin`
+   equality is checked first and fails closed; the token is defence in depth.
+
+The nastiest finding was one I would not have looked for: **login had to be a POST**. `SameSite=Lax`
+deliberately permits top-level GET navigations, so a `GET /api/auth/login?tenant=` lets any website
+push a visitor into an *attacker-chosen* tenant. The victim authenticates against the attacker's
+realm and their next upload lands in the attacker's workspace — tenant isolation holding perfectly
+at every layer the whole time. It is an authentication flaw wearing an isolation flaw's clothes, and
+it is now T9 in the threat model.
+
+Two more the tests found that the review had not:
+
+- **A path traversal in my own proxy.** `.` has to be in the segment charset (filenames), which makes
+  a dots-only segment the one traversal a charset cannot catch. `x/../../media/secret.pdf` resolved
+  to `/media/secret.pdf` — outside `/api` entirely, with a valid tenant bearer attached. The test
+  that caught it asserts *nothing was fetched*, which is why it failed loudly instead of quietly
+  returning 502.
+- **My header-allowlist tests were vacuous.** Mutating the proxy to forward the browser's headers
+  wholesale left them green. In this harness some headers the route provably holds do not survive
+  MSW interception, so the integration assertion could not tell the two implementations apart. I
+  extracted the policy into `lib/upstream.ts` as pure functions with exact-equality assertions;
+  both mutations now fail. The limitation is recorded in that file rather than glossed over.
+
+Every security control is mutation-tested — 11 mutations across the two halves, each caught by the
+specific test that claims it. 102 frontend tests, 227 backend; lint, typecheck and `next build` green
+on Node 22.23.2.
+
+Deliberately not built, and why: no AES-GCM sealed cookies (moot once the cookie is an opaque id), no
+HMAC on the transaction cookie (`__Host-` already makes it unsettable by a sibling host), no
+single-flight refresh lock (Keycloak's refresh rotation is off by default, so a racing double refresh
+is idempotent), and no `next`/`returnTo` parameter — not adding one removes the open-redirect class
+outright. Back-channel logout is deferred and bounded: an IdP-side termination takes effect at the API
+when the access token expires.
+
+Then a second adversarial review, this time over the *implementation* — 26 raised, **23 confirmed**,
+and it was worth every token. The two worst were things all my green tests agreed were fine:
+
+- **Every cookie deletion was a no-op in production.** `response.cookies.delete(name)` emits
+  `Set-Cookie: name=; Path=/; Expires=Thu, 01 Jan 1970` — no `Secure` — and RFC 6265bis requires a
+  browser to *ignore* a `__Host-`-prefixed cookie without it. The prefix is applied only on https, and
+  the tests run on http, so sign-out "worked" locally while leaving the session cookie in the jar for
+  eight hours on a real deployment. Reading Next's vendored cookie code made it worse: `delete(name,
+  options)` silently discards `options` when the first argument is a string, so there is no escape
+  hatch — hence `clearCookie`, which re-sets the cookie with its real flags and a zero lifetime. Four
+  of the five review lenses found this independently, which is usually a sign it is the real one.
+- **The app logged everyone out about five minutes after login.** Token refresh lived only in the API
+  proxy, and the one page the app actually renders talks to Django directly — so a reload after
+  Keycloak's default five-minute access-token lifespan sent an expired bearer, got a 401, and bounced
+  the user to the login form while the BFF sat on a perfectly good refresh token. Refresh is now a
+  shared `ensureFreshSession` used by both paths, and it distinguishes `invalid_grant` (the session
+  really is over) from an unreachable IdP (retryable, 503, session kept) — collapsing those two would
+  have signed out every user during a brief provider blip.
+- **`make dev` could not complete a login at all.** The documented issuer was
+  `http://localhost:8080/realms/acme`, which the *frontend container* cannot reach — inside a
+  container, `localhost` is the container. The issuer has to be one string that means the same
+  Keycloak to the browser, the Next server and Django, so it is `http://keycloak:8080/...` now, with
+  a one-line `/etc/hosts` entry for the browser and `KC_HOSTNAME` pinned in compose so `start-dev`
+  stops deriving a different issuer per request Host.
+- Two of my "proofs" were not. `/tiq_session=.*Max-Age=0|1970/` parses as
+  `(tiq_session=.*Max-Age=0)|(1970)`, so the `1970` in *any* cookie's expiry satisfied it — two
+  assertions that the session cookie was cleared passed while it never was. And nothing checked the
+  flags the callback route actually applies, so the suite would have accepted a session cookie minted
+  with no `HttpOnly` at all. Both are now exact assertions on the literal `Set-Cookie`.
+- Proxied responses carried no `Cache-Control`. Django sets none on most responses, which leaves
+  per-tenant data on a cookie-authenticated URL heuristically cacheable by any shared cache — so
+  every proxied response is now `private, no-store` + `Vary: Cookie` (T12/T13).
+- Smaller but real: login had no error handling, so a discovery or IdP failure surfaced as a raw 500
+  instead of the login form; orphaned session records (live refresh tokens) were never reclaimed; and
+  clearing the transaction cookie on a *state mismatch* destroyed a concurrent tab's live login,
+  making both tabs fail — the one case that must not clear.
+
+`LogoutButton`, the browser half of the CSRF scheme, had no test at all; it has four now. Six more
+mutations, all caught.
+
+Two things I have **not** verified, stated plainly rather than implied: no login has been run against
+a live Keycloak, so the `make dev` fix above is reasoned from container networking and Keycloak's
+hostname behaviour rather than observed; and the `globalThis`-pinned session store is still unproven
+as one instance across the callback handler, the proxy handler and the Server Component under a real
+`make dev`. The pin exists precisely so separate Next bundles cannot produce separate maps, but it is
+worth a real login before anyone trusts it in anger.
