@@ -166,6 +166,27 @@ describe("SourceCard", () => {
     expect(screen.getByText("sim 0.83")).toBeInTheDocument();
   });
 
+  it("keeps the evidence out of the control's accessible name", () => {
+    // The failure this pins: making the whole card a <button> hides every descendant from the
+    // accessibility tree (role=button is children-presentational), so the quote, chunk id and
+    // offsets survive only as one unpunctuated accessible name — present, and unreadable.
+    render(<SourceCard source={source} onSelect={() => {}} />);
+
+    const control = screen.getByRole("button");
+    expect(control).toHaveAccessibleName("Show source 1 in the answer");
+    expect(control.textContent).not.toContain(source.quote);
+    // The quote is real content in its own right, not a fragment of a label.
+    expect(screen.getByText(source.quote)).toBeInTheDocument();
+  });
+
+  it("has no control at all when it is display-only", () => {
+    // No focusable no-op in the tab order for a card nobody can act on.
+    render(<SourceCard source={source} />);
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText(source.quote)).toBeInTheDocument();
+  });
+
   it("is selectable and reports its selection state", async () => {
     const onSelect = vi.fn();
     render(<SourceCard source={source} onSelect={onSelect} active />);
@@ -179,10 +200,14 @@ describe("SourceCard", () => {
 });
 
 describe("NoEvidence — the refusal state", () => {
+  const refusal = () => screen.getByRole("region", { name: "No supporting passage found" });
+
   it("says plainly that nothing was found, and does not answer", () => {
     render(<NoEvidence question="What are the payment terms?" />);
 
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    // A named region, not role="status": `status` implies aria-atomic, which would flatten the
+    // heading, the explanation and both suggestions into a single structureless utterance.
+    expect(refusal()).toBeInTheDocument();
     expect(screen.getByRole("heading")).toHaveTextContent("No supporting passage found");
   });
 
@@ -198,8 +223,18 @@ describe("NoEvidence — the refusal state", () => {
   it("quotes the question back without claiming to have answered it", () => {
     render(<NoEvidence question="What are the payment terms?" />);
 
-    expect(screen.getByRole("status")).toHaveTextContent("What are the payment terms?");
-    expect(screen.getByRole("status")).toHaveTextContent(/answered nothing/i);
+    expect(refusal()).toHaveTextContent("What are the payment terms?");
+    expect(refusal()).toHaveTextContent(/answered nothing/i);
+  });
+
+  it("leaves a space before the quoted question", () => {
+    // JSX strips whitespace around a newline before an expression, so the obvious formatting
+    // renders "close enough toWhat are the payment terms?" — invisible in a screenshot, because
+    // the <q> element's own margin fakes the gap, and wrong for anyone listening to it.
+    render(<NoEvidence question="What are the payment terms?" />);
+
+    expect(refusal().textContent).toContain("close enough to ");
+    expect(refusal().textContent).not.toContain("toWhat");
   });
 
   it("works with no question supplied", () => {

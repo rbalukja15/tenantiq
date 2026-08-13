@@ -1,0 +1,19 @@
+.wrap {
+  min-height: 100dvh;
+  display: grid;
+  place-content: center;
+  justify-items: start;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-5);
+  max-width: var(--measure);
+  margin: 0 auto;
+}
+
+.body {
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+}
+
+.link {
+  font-size: var(--text-sm);
+}

@@ -5,6 +5,8 @@ import styles from "./Callout.module.css";
 type Props = {
   /** `error` announces assertively; `info` and `warning` are polite status messages. */
   tone?: "error" | "warning" | "info";
+  /** Set when a form control needs to point at this message via `aria-describedby`. */
+  id?: string;
   children: ReactNode;
 };
 
@@ -15,9 +17,13 @@ type Props = {
  * immediately), while informational messages are `status` (announced when the user is idle).
  * Marking everything `alert` trains people to ignore alerts.
  */
-export function Callout({ tone = "info", children }: Props) {
+export function Callout({ tone = "info", id, children }: Props) {
   return (
-    <p className={`${styles.callout} ${styles[tone]}`} role={tone === "error" ? "alert" : "status"}>
+    <p
+      id={id}
+      className={`${styles.callout} ${styles[tone]}`}
+      role={tone === "error" ? "alert" : "status"}
+    >
       {children}
     </p>
   );

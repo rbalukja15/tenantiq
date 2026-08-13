@@ -746,3 +746,55 @@ Seven mutations, each caught by the test that claims it. 181 frontend tests. Ver
 browser at desktop and 375px in both themes, with no horizontal scroll and a clean console — the
 accent that looked wrong in a screenshot turned out to be exactly `#12645a` under `getComputedStyle`,
 which is a good reminder that a screenshot is evidence about a screenshot.
+
+Then the adversarial review over the implementation: 22 raised, **19 confirmed**, and it went
+straight at the thing I was most pleased with.
+
+The worst finding was in `SourceCard`. I had made the whole card a `<button>` for a big click
+target — and `role=button` is *children-presentational* in ARIA, so every descendant is stripped
+from the accessibility tree. The quote, chunk id, offsets and similarity survived only as the
+button's computed accessible name: one unpunctuated run, because the visual separation is flex
+`gap`, which contributes no text. The evidence would have been technically present and practically
+unreadable, in the one component whose entire job is making evidence readable. The suggested fix was
+a transparent control stretched over the card, which keeps the target and blocks text selection —
+and copying a quoted passage is a primary thing to do with a citation. So the badge is the control
+now, which is also the honest affordance: it mirrors the citation chip at the other end of the
+relationship it triggers.
+
+Two findings landed on the contrast test itself, which is the most useful kind:
+
+- **The one contrast rule actually violated was the pair the test believed it had covered.** The
+  placeholder was `--ink-muted` at `opacity: 0.7`, which composites to 3.53:1 — below AA — while the
+  test verified the token at full opacity and reported it green. The rule now is that text colour is
+  never modulated by `opacity` outside the token file, because the test reads `global.css` and cannot
+  see alpha applied in a module.
+- **Parity alone was not enough.** Setting `--rule: transparent` in *both* palettes removed it from
+  both sides of the comparison and stayed green, with every card edge gone. There is a required-token
+  list now. The parser also read only the first `:root` block, so a token added in a second one was
+  invisible; it reads all of them.
+
+And `--accent` is held to the 4.5:1 text threshold rather than 3:1, because the wordmark renders it
+at 18px/600 — WCAG "large text" starts at 18.66px **bold**, so that is normal text. It passes at
+7.01:1; the point is that nothing was checking.
+
+The 375px acceptance criterion was quietly broken: nothing set `overflow-wrap`, and a long German
+company name as a tenant name took the document to 701px against a 375px viewport. Measured in a real
+browser, before and after — jsdom does no layout, so no unit test could have caught it, which is
+exactly what ADR-0014 §6 says about the limits of what is tested here.
+
+Smaller but real: `LogoutButton` never adopted the design system and was still a native UA button in
+the styled header; `.table th` was not scoped to `thead`, so `<th scope="row">` — the correct markup
+for #20's filename column — rendered a case-significant filename uppercased and `nowrap`; the
+`data-numeric` convention #20 depends on appeared exactly once in the repo, in a CSS selector nobody
+would find, and matched React's `data-numeric={false}` (serialised as the string `"false"`); the
+refusal state's `role="status"` carried an implicit `aria-atomic`, flattening heading, explanation and
+suggestions into one structureless utterance; and JSX whitespace stripping rendered
+"close enough toWhat are the payment terms?" — invisible in a screenshot because the `<q>` margin
+fakes the gap.
+
+Mutation testing then found a gap of its own: removing the login error's field association broke
+nothing, because nothing tested it. There is a `login-page.test.tsx` now, and an assertion that the
+`SourceCard` control's accessible name stays short. Both fail under the mutation that motivated them.
+
+230 frontend tests, 227 backend. Nine mutations across the two rounds, each caught by the test that
+claims it.

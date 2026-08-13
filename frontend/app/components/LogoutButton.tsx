@@ -1,6 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+
+import { Button } from "@/app/components/ui/Button";
 import { useState } from "react";
 
 /**
@@ -42,8 +44,8 @@ export function LogoutButton() {
   }
 
   return (
-    <button type="button" onClick={signOut} disabled={busy}>
+    <Button variant="quiet" onClick={signOut} disabled={busy}>
       {busy ? "Signing out…" : "Sign out"}
-    </button>
+    </Button>
   );
 }

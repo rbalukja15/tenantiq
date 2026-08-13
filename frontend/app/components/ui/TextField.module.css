@@ -14,8 +14,6 @@
 
 .input {
   font: inherit;
-  /* Mono because a workspace slug is an identifier to be checked character by character. */
-  font-family: var(--font-mono);
   font-size: var(--text-sm);
   padding: var(--space-2) var(--space-3);
   color: var(--ink);
@@ -25,9 +23,18 @@
   border-radius: var(--radius-sm);
 }
 
+/* Opt-in: an identifier is checked character by character, so it gets the evidence face. Prose
+   fields — #19's question composer, #20's document title — must not, or they read as code. */
+.mono {
+  font-family: var(--font-mono);
+}
+
 .input::placeholder {
   color: var(--ink-muted);
-  opacity: 0.7;
+  /* Pinned to 1, and never dimmed. At 0.7 the composited colour was 3.53:1 — below AA — and
+     invisible to tests/tokens.test.ts, which reads global.css and cannot see alpha applied in a
+     module. Deleting the line is worse: Firefox's UA sheet dims placeholders to ~0.54. */
+  opacity: 1;
 }
 
 .hint {

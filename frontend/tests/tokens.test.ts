@@ -51,12 +51,15 @@ function palette(theme: "light" | "dark"): Record<string, string> {
   expect(darkAt, "no dark palette found in global.css").toBeGreaterThan(-1);
 
   const region = theme === "light" ? CSS.slice(0, darkAt) : CSS.slice(darkAt);
-  const start = region.indexOf(":root");
-  const block = region.slice(start, region.indexOf("}", start));
 
+  // *Every* `:root` block in the region, not just the first. Reading only the first would let a
+  // token added in a second block go silently unchecked — which is the same class of hole these
+  // tests exist to close.
   const tokens: Record<string, string> = {};
-  for (const [, name, value] of block.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
-    tokens[name] = value.trim();
+  for (const [, body] of region.matchAll(/:root[^{]*\{([^}]*)\}/g)) {
+    for (const [, name, value] of body.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+      tokens[name] = value.trim();
+    }
   }
   return tokens;
 }
@@ -70,6 +73,42 @@ const colourNames = (p: Record<string, string>) =>
     .filter(([, v]) => isColour(v))
     .map(([k]) => k)
     .sort();
+
+/**
+ * Tokens the app depends on by name. Parity alone does not cover these: setting one to `transparent`
+ * in *both* palettes removes it from both sides of the comparison, and the suite would stay green
+ * while every card edge vanished.
+ */
+const REQUIRED_COLOURS = [
+  "--paper",
+  "--surface",
+  "--sunken",
+  "--ink",
+  "--ink-muted",
+  "--rule",
+  "--rule-soft",
+  "--rule-strong",
+  "--accent",
+  "--accent-ink",
+  "--accent-wash",
+  "--on-accent",
+  "--ok",
+  "--ok-wash",
+  "--warn",
+  "--warn-wash",
+  "--crit",
+  "--crit-wash",
+];
+
+describe.each(["light", "dark"] as const)("%s theme completeness", (theme) => {
+  const tokens = theme === "light" ? light : dark;
+
+  it.each(REQUIRED_COLOURS)("defines %s as a real colour", (name) => {
+    expect(tokens[name], `${name} is missing or not a colour in the ${theme} palette`).toMatch(
+      /^#[0-9a-f]{3,8}$/i,
+    );
+  });
+});
 
 describe("token parity", () => {
   it("defines the same colour tokens in both themes", () => {
@@ -98,6 +137,11 @@ const TEXT_PAIRS: [string, string][] = [
   ["--ok", "--ok-wash"], // status pills
   ["--warn", "--warn-wash"],
   ["--crit", "--crit-wash"],
+  // The wordmark renders --accent as 18px/600 text. WCAG "large text" starts at 18.66px *bold*
+  // (700) or 24px, so this is normal text and owes the full 4.5:1 — not the 3:1 it would get if it
+  // were only ever a border or an icon.
+  ["--accent", "--surface"],
+  ["--accent", "--paper"],
 ];
 
 /**
@@ -109,8 +153,6 @@ const TEXT_PAIRS: [string, string][] = [
  * `--rule-strong`, which is checked here — that split is why this list exists at all.
  */
 const UI_PAIRS: [string, string][] = [
-  ["--accent", "--paper"], // focus ring, active nav
-  ["--accent", "--surface"],
   ["--rule-strong", "--surface"], // a text input's edge, on a card
   ["--rule-strong", "--paper"], // and on the page ground
 ];

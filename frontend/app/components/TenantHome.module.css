@@ -37,4 +37,7 @@
   background: var(--accent-wash);
   padding: 0.1em 0.4em;
   border-radius: var(--radius-sm);
+  /* `anywhere`, not `break-word`: this is a flex item, so it is floored at its min-content width and
+     only `anywhere` allows that floor to shrink. */
+  overflow-wrap: anywhere;
 }

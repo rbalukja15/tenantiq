@@ -37,17 +37,26 @@ export default async function LoginPage({
         <h1 className={styles.title}>Sign in to TenantIQ</h1>
         <p className={styles.lede}>Enter your workspace to continue to your identity provider.</p>
 
-        {message ? <Callout tone="error">{message}</Callout> : null}
+        {message ? (
+          <Callout id="login-error" tone="error">
+            {message}
+          </Callout>
+        ) : null}
 
         <form className={styles.form} method="post" action="/api/auth/login">
           <TextField
             label="Workspace"
             name="tenant"
             required
+            mono
             autoComplete="organization"
             placeholder="acme"
             spellCheck={false}
             hint="The short name for your organisation, e.g. acme."
+            /* The error arrives as a fresh document load, so `role="alert"` alone announces nothing
+               — a live region only reports mutations after it is registered. Pointing the field at
+               the message is what makes the failure reachable. */
+            errorId={message ? "login-error" : undefined}
           />
           <Button type="submit" full>
             Continue

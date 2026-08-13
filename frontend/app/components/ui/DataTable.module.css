@@ -27,7 +27,7 @@
   border: 0;
 }
 
-.table :global(th) {
+.table :global(thead th) {
   text-align: left;
   font-size: var(--text-xs);
   letter-spacing: 0.1em;
@@ -39,16 +39,32 @@
   white-space: nowrap;
 }
 
-.table :global(td) {
+.table :global(td),
+.table :global(tbody th) {
   padding: var(--space-2) var(--space-3);
   border-bottom: var(--border) solid var(--rule-soft);
   vertical-align: middle;
 }
 
-/* Numbers line up only if they are tabular and right-aligned; both, or neither. */
-.table :global(td[data-numeric]) {
+/* A row header identifies its row; it is not a column header, so it keeps sentence case. Without
+   this, `<th scope="row">` — the correct markup for a filename cell — renders a case-significant
+   filename in uppercase, letter-spaced and `nowrap`. */
+.table :global(tbody th) {
+  text-align: left;
+  font-weight: 600;
+}
+
+/* Numbers line up only if they are tabular and right-aligned; both, or neither — and a column's
+   header has to follow its digits, or the heading sits left while the values sit right.
+   `:not([data-numeric="false"])` because React serialises a `data-*` boolean as the string "false",
+   which a bare presence selector would still match. */
+.table :global(thead th[data-numeric]:not([data-numeric="false"])),
+.table :global(td[data-numeric]:not([data-numeric="false"])) {
+  text-align: right;
+}
+
+.table :global(td[data-numeric]:not([data-numeric="false"])) {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  text-align: right;
   white-space: nowrap;
 }

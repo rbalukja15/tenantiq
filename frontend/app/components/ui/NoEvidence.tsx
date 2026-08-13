@@ -17,12 +17,22 @@ import styles from "./NoEvidence.module.css";
  */
 export function NoEvidence({ question }: { question?: string }) {
   return (
-    <section className={styles.wrap} role="status">
-      <h2 className={styles.heading}>No supporting passage found</h2>
+    /*
+     * A named region with the announcement scoped to the heading — not `role="status"` on the whole
+     * section. `status` carries an implicit `aria-atomic="true"`, so the heading, the paragraph and
+     * both list items would be flattened into one utterance with their structure discarded, and the
+     * explicit role would also override the section's implicit `region` role.
+     */
+    <section className={styles.wrap} aria-labelledby="no-evidence-heading">
+      <h2 id="no-evidence-heading" className={styles.heading} aria-live="polite">
+        No supporting passage found
+      </h2>
       <p className={styles.body}>
-        Nothing in this workspace&rsquo;s documents was close enough to
-        {question ? <q className={styles.q}>{question}</q> : " that question"} to answer from.
-        Rather than guess, TenantIQ has answered nothing.
+        {/* The `{" "}` is load-bearing: JSX strips the whitespace around a newline before an
+            expression, so `to\n{question}` renders as "toWhat are the payment terms?". */}
+        Nothing in this workspace&rsquo;s documents was close enough to{" "}
+        {question ? <q className={styles.q}>{question}</q> : "that question"} to answer from. Rather
+        than guess, TenantIQ has answered nothing.
       </p>
       <ul className={styles.next}>
         <li>Try naming the document or the exact term you expect to appear.</li>
