@@ -64,7 +64,9 @@ describe("POST /api/auth/login", () => {
     const line = response.headers.getSetCookie().find((c) => c.startsWith("tiq_tx=")) as string;
     expect(line).toMatch(/HttpOnly/);
     expect(line).toMatch(/Max-Age=600/);
-    const payload = JSON.parse(decodeURIComponent(line.split(";")[0].split("=").slice(1).join("=")));
+    const payload = JSON.parse(
+      decodeURIComponent(line.split(";")[0].split("=").slice(1).join("=")),
+    );
     expect(payload).toHaveProperty("verifier");
     expect(payload).toHaveProperty("state");
     expect(payload.slug).toBe("acme");

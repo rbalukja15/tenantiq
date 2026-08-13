@@ -1,3 +1,9 @@
+import { Button } from "@/app/components/ui/Button";
+import { Callout } from "@/app/components/ui/Callout";
+import { TextField } from "@/app/components/ui/TextField";
+
+import styles from "./page.module.css";
+
 const MESSAGES: Record<string, string> = {
   retry: "That sign-in attempt could not be completed. Please try again.",
   unknown_tenant: "We could not find that workspace. Check the name and try again.",
@@ -6,7 +12,7 @@ const MESSAGES: Record<string, string> = {
 };
 
 /**
- * The login form (#18).
+ * The login form (#18, styled in #74).
  *
  * A plain `<form method="post">` rather than a link, because starting a login is a state-changing
  * action: `SameSite=Lax` permits top-level GET navigations, so a GET login endpoint would let any
@@ -26,21 +32,37 @@ export default async function LoginPage({
   const message = error ? MESSAGES[error] : undefined;
 
   return (
-    <main>
-      <h1>Sign in to TenantIQ</h1>
-      {message ? <p role="alert">{message}</p> : null}
-      <form method="post" action="/api/auth/login">
-        <label htmlFor="tenant">Workspace</label>
-        <input
-          id="tenant"
-          name="tenant"
-          type="text"
-          required
-          autoComplete="organization"
-          placeholder="acme"
-        />
-        <button type="submit">Continue</button>
-      </form>
-    </main>
+    <div className={styles.wrap}>
+      <div className={styles.card}>
+        <h1 className={styles.title}>Sign in to TenantIQ</h1>
+        <p className={styles.lede}>Enter your workspace to continue to your identity provider.</p>
+
+        {message ? (
+          <Callout id="login-error" tone="error">
+            {message}
+          </Callout>
+        ) : null}
+
+        <form className={styles.form} method="post" action="/api/auth/login">
+          <TextField
+            label="Workspace"
+            name="tenant"
+            required
+            mono
+            autoComplete="organization"
+            placeholder="acme"
+            spellCheck={false}
+            hint="The short name for your organisation, e.g. acme."
+            /* The error arrives as a fresh document load, so `role="alert"` alone announces nothing
+               — a live region only reports mutations after it is registered. Pointing the field at
+               the message is what makes the failure reachable. */
+            errorId={message ? "login-error" : undefined}
+          />
+          <Button type="submit" full>
+            Continue
+          </Button>
+        </form>
+      </div>
+    </div>
   );
 }

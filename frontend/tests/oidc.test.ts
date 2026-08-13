@@ -124,7 +124,9 @@ describe("fetchOpenIdConfiguration", () => {
       const oidc = await import("@/lib/oidc");
       server.use(
         http.get(`${ISSUER}/.well-known/openid-configuration`, () =>
-          HttpResponse.json(providerDocument({ token_endpoint: "http://collector.evil.example/t" })),
+          HttpResponse.json(
+            providerDocument({ token_endpoint: "http://collector.evil.example/t" }),
+          ),
         ),
       );
 

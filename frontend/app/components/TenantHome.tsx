@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation";
 
+import { Callout } from "@/app/components/ui/Callout";
 import { apiBaseUrl } from "@/lib/config";
+
+import styles from "./TenantHome.module.css";
 
 /** The subset of `GET /api/me` this view needs (see the backend's `MeView`). */
 type Me = {
@@ -32,19 +35,20 @@ export async function TenantHome({ accessToken }: { accessToken: string }) {
   if (response.status === 401) redirect("/login?error=session_expired");
   if (!response.ok) {
     // Generic on purpose: an API failure reason is not something to render back to the browser.
-    return <p role="alert">Could not load your session.</p>;
+    return <Callout tone="error">Could not load your session.</Callout>;
   }
 
   const me = (await response.json()) as Me;
 
   return (
-    <section>
-      <h1>{me.tenant.name}</h1>
-      <p>
+    <section className={styles.wrap}>
+      <h1 className={styles.tenant}>{me.tenant.name}</h1>
+      <p className={styles.identity}>
         Signed in as <strong>{me.username}</strong>
       </p>
-      <p>
-        Tenant <code>{me.tenant.slug}</code>. Your documents and answers are scoped to it.
+      <p className={styles.scope}>
+        <span className={styles.slug}>{me.tenant.slug}</span>
+        Every document and answer you see is scoped to this workspace.
       </p>
     </section>
   );

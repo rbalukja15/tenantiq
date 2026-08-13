@@ -73,8 +73,9 @@ describe("buildUpstreamHeaders", () => {
     // With a streamed body undici would emit Transfer-Encoding: chunked, and Django's WSGI handler
     // reads CONTENT_LENGTH (defaulting to 0) — so dropping this makes an upload arrive *empty*
     // rather than failing loudly.
-    expect(buildUpstreamHeaders(new Headers({ "content-length": "42" }), "t").get("content-length"))
-      .toBe("42");
+    expect(
+      buildUpstreamHeaders(new Headers({ "content-length": "42" }), "t").get("content-length"),
+    ).toBe("42");
   });
 
   it("omits an allowlisted header that was not sent, rather than sending it empty", () => {

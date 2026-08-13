@@ -694,3 +694,114 @@ hostname behaviour rather than observed; and the `globalThis`-pinned session sto
 as one instance across the callback handler, the proxy handler and the Server Component under a real
 `make dev`. The pin exists precisely so separate Next bundles cannot produce separate maps, but it is
 worth a real login before anyone trusts it in anger.
+
+## 2026-08-12 — M4 #74: a design system, and a test that can fail
+Everything #18 shipped was unstyled. That was right for an auth issue and wrong to leave standing:
+#19 and #20 each add substantial UI, and without a shared system they would each invent colours and
+spacing, leaving three visual languages and a retrofit. So this landed first.
+
+**The direction came before the CSS.** The product's differentiator is that every answer is traceable
+to a real chunk at real character offsets, so the interface is laid out like a critical edition —
+answer on one side, retrieved source on the other, joined by clickable citations. Type carries that:
+serif for prose (text to be *read*), sans for chrome (to be *operated*), mono for chunk ids, offsets
+and money (to be *verified*). Seeing mono means "this is a fact you could go and check".
+
+**CSS Modules over tokens** (ADR-0014), not Tailwind. Tailwind is what people expect and is faster
+for conventional layouts, but this design turns into arbitrary values fast — three font roles, an
+optical offset on citation markers — and the repo is meant to be *read*: `.source[data-active]` tells
+a reviewer more than a forty-class string. A single global stylesheet was the other candidate and
+loses to scoping: every class would be a global name, which is the exact collision CSS Modules
+removes for free.
+
+**The part I'd keep in any project: `tests/tokens.test.ts`.** Most CSS tests are theatre — jsdom
+doesn't apply a CSS Module, so asserting a component "got a class" proves a string moved. This one
+reads the stylesheet as data and checks the two things that *are* objective: both themes define the
+same token set, and every text pair clears WCAG AA in **both** themes. It caught something on its
+first run. I had one `--rule` used for both card edges and input borders, and it failed 3:1 against
+the surface. The interesting part was deciding it was my *assertion* that was wrong, not the colour:
+WCAG 1.4.11 requires 3:1 for boundaries that *identify a control*, not for decorative dividers. But
+the failure was still real, because I had no token that met the control requirement. Hence two line
+weights split on a WCAG boundary rather than an aesthetic one — `--rule` for card edges, and
+`--rule-strong` for a text field's border, which the test now holds to 3:1. A single hairline would
+have made every input invisible to a low-vision user; holding every divider to 3:1 would have made
+the whole app look like a spreadsheet.
+
+A token missing from one palette is also now a failure. That one is invisible in normal development:
+it resolves to nothing, and the element renders transparent — for people using the other theme only.
+
+**The refusal state ships here, not in #19.** What a reader sees when nothing clears the similarity
+floor is the most important screen in a grounded-answers product, and building it inside the chat
+component is how it becomes a grey box saying "No results". It is a primitive: set in the interface
+sans rather than the answer serif so it never reads as prose the model produced, carrying no
+citations because there is nothing to cite, and stating what to try next. A test asserts it renders
+no citation control at all — the specific way it would rot is by growing one and starting to look
+like a confident answer with the evidence collapsed.
+
+The component tests assert **semantics**, never appearance: accessible names, label associations,
+roles, and whether meaning survives without colour (a status pill states its status in words —
+WCAG 1.4.1 — so the test fails if someone reduces it to a coloured dot). Appearance is verified by
+`next build` plus screenshots, and that limit is written down rather than papered over.
+
+Seven mutations, each caught by the test that claims it. 181 frontend tests. Verified in a real
+browser at desktop and 375px in both themes, with no horizontal scroll and a clean console — the
+accent that looked wrong in a screenshot turned out to be exactly `#12645a` under `getComputedStyle`,
+which is a good reminder that a screenshot is evidence about a screenshot.
+
+Then the adversarial review over the implementation: 22 raised, **19 confirmed**, and it went
+straight at the thing I was most pleased with.
+
+The worst finding was in `SourceCard`. I had made the whole card a `<button>` for a big click
+target — and `role=button` is *children-presentational* in ARIA, so every descendant is stripped
+from the accessibility tree. The quote, chunk id, offsets and similarity survived only as the
+button's computed accessible name: one unpunctuated run, because the visual separation is flex
+`gap`, which contributes no text. The evidence would have been technically present and practically
+unreadable, in the one component whose entire job is making evidence readable. The suggested fix was
+a transparent control stretched over the card, which keeps the target and blocks text selection —
+and copying a quoted passage is a primary thing to do with a citation. So the badge is the control
+now, which is also the honest affordance: it mirrors the citation chip at the other end of the
+relationship it triggers.
+
+Two findings landed on the contrast test itself, which is the most useful kind:
+
+- **The one contrast rule actually violated was the pair the test believed it had covered.** The
+  placeholder was `--ink-muted` at `opacity: 0.7`, which composites to 3.53:1 — below AA — while the
+  test verified the token at full opacity and reported it green. The rule now is that text colour is
+  never modulated by `opacity` outside the token file, because the test reads `global.css` and cannot
+  see alpha applied in a module.
+- **Parity alone was not enough.** Setting `--rule: transparent` in *both* palettes removed it from
+  both sides of the comparison and stayed green, with every card edge gone. There is a required-token
+  list now. The parser also read only the first `:root` block, so a token added in a second one was
+  invisible; it reads all of them.
+
+And `--accent` is held to the 4.5:1 text threshold rather than 3:1, because the wordmark renders it
+at 18px/600 — WCAG "large text" starts at 18.66px **bold**, so that is normal text. It passes at
+7.01:1; the point is that nothing was checking.
+
+The 375px acceptance criterion was quietly broken: nothing set `overflow-wrap`, and a long German
+company name as a tenant name took the document to 701px against a 375px viewport. Measured in a real
+browser, before and after — jsdom does no layout, so no unit test could have caught it, which is
+exactly what ADR-0014 §6 says about the limits of what is tested here.
+
+Smaller but real: `LogoutButton` never adopted the design system and was still a native UA button in
+the styled header; `.table th` was not scoped to `thead`, so `<th scope="row">` — the correct markup
+for #20's filename column — rendered a case-significant filename uppercased and `nowrap`; the
+`data-numeric` convention #20 depends on appeared exactly once in the repo, in a CSS selector nobody
+would find, and matched React's `data-numeric={false}` (serialised as the string `"false"`); the
+refusal state's `role="status"` carried an implicit `aria-atomic`, flattening heading, explanation and
+suggestions into one structureless utterance; and JSX whitespace stripping rendered
+"close enough toWhat are the payment terms?" — invisible in a screenshot because the `<q>` margin
+fakes the gap.
+
+Mutation testing then found a gap of its own: removing the login error's field association broke
+nothing, because nothing tested it. There is a `login-page.test.tsx` now, and an assertion that the
+`SourceCard` control's accessible name stays short. Both fail under the mutation that motivated them.
+
+230 frontend tests, 227 backend. Nine mutations across the two rounds, each caught by the test that
+claims it.
+
+CI then failed on something none of that would have caught: `tsc --noEmit` could not resolve a single
+`*.module.css` import. That declaration reaches tsc only through `next-env.d.ts`, which Next
+generates and `.gitignore` excludes (#52) — so on a clean checkout it does not exist. Locally it did,
+because a `next dev` server had been running the whole time quietly regenerating it, and before this
+issue nothing imported a CSS Module, so the gap was invisible. `npm run typecheck` runs
+`next typegen` first now; verified by reproducing all fifteen errors with the dev server stopped.

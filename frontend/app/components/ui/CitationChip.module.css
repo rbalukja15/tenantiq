@@ -1,0 +1,26 @@
+.chip {
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  /* Raised like a footnote marker, without superscript's shrinking of an already small target. */
+  vertical-align: 0.38em;
+  margin-left: 0.12em;
+  padding: 0.18em 0.34em;
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border: var(--border) solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+}

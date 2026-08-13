@@ -1,0 +1,93 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: var(--border) solid var(--rule);
+  /* The left edge is the selection indicator, so it gets its own weight. */
+  border-left-width: 2px;
+  border-radius: var(--radius-sm);
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.card[data-active] {
+  background: var(--accent-wash);
+  border-left-color: var(--accent);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The badge, whether or not it is interactive. */
+.badge,
+.badgeButton {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  border-radius: var(--radius-sm);
+  padding: 0.25em 0.45em;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.badgeButton {
+  font-family: inherit;
+  border: var(--border) solid transparent;
+  cursor: pointer;
+}
+
+.badgeButton:hover {
+  border-color: var(--accent);
+}
+
+.card[data-active] .badge,
+.card[data-active] .badgeButton {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.doc {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.quote {
+  /* Serif: this is the document's own prose, quoted verbatim. */
+  font-family: var(--font-serif);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--ink);
+  border-left: var(--border) solid var(--rule);
+  padding-left: var(--space-3);
+  /* Chunk text is verbatim, and contracts are full of URLs and file paths: a long unbreakable run
+     must wrap rather than paint through the card's border and off the viewport. */
+  overflow-wrap: anywhere;
+}
+
+.card[data-active] .quote {
+  border-left-color: var(--accent);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}

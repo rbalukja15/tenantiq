@@ -1,0 +1,70 @@
+.scroll {
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--text-sm);
+}
+
+.caption {
+  text-align: left;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  padding-bottom: var(--space-2);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.table :global(thead th) {
+  text-align: left;
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border) solid var(--rule);
+  white-space: nowrap;
+}
+
+.table :global(td),
+.table :global(tbody th) {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border) solid var(--rule-soft);
+  vertical-align: middle;
+}
+
+/* A row header identifies its row; it is not a column header, so it keeps sentence case. Without
+   this, `<th scope="row">` — the correct markup for a filename cell — renders a case-significant
+   filename in uppercase, letter-spaced and `nowrap`. */
+.table :global(tbody th) {
+  text-align: left;
+  font-weight: 600;
+}
+
+/* Numbers line up only if they are tabular and right-aligned; both, or neither — and a column's
+   header has to follow its digits, or the heading sits left while the values sit right.
+   `:not([data-numeric="false"])` because React serialises a `data-*` boolean as the string "false",
+   which a bare presence selector would still match. */
+.table :global(thead th[data-numeric]:not([data-numeric="false"])),
+.table :global(td[data-numeric]:not([data-numeric="false"])) {
+  text-align: right;
+}
+
+.table :global(td[data-numeric]:not([data-numeric="false"])) {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

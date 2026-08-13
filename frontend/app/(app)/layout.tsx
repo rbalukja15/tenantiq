@@ -2,19 +2,23 @@ import type { ReactNode } from "react";
 
 import { LogoutButton } from "@/app/components/LogoutButton";
 
+import styles from "./layout.module.css";
+
 /**
- * Chrome for the signed-in area (#18). `(app)` is a route group, so it adds no URL segment — `/`
- * still resolves to `(app)/page.tsx` — but it scopes this header to authenticated routes and keeps
- * it off `/login`.
+ * Chrome for the signed-in area (#18, styled in #74). `(app)` is a route group, so it adds no URL
+ * segment — `/` still resolves to `(app)/page.tsx` — but it scopes this header to authenticated
+ * routes and keeps it off `/login`.
  */
 export default function AppLayout({ children }: { children: ReactNode }) {
   return (
-    <>
-      <header>
-        <strong>TenantIQ</strong>
+    <div className={styles.shell}>
+      <header className={styles.header}>
+        <span className={styles.brand}>
+          Tenant<em>IQ</em>
+        </span>
         <LogoutButton />
       </header>
-      <main>{children}</main>
-    </>
+      <main className={styles.main}>{children}</main>
+    </div>
   );
 }

@@ -81,6 +81,10 @@ jobs:
         run: npm run lint
       - name: Typecheck
         # TS strict is a project convention (CLAUDE.md); without this it was only enforced at build.
+        # The script runs `next typegen` first: the declaration for `*.module.css` reaches tsc only
+        # via `next-env.d.ts`, which is generated (and gitignored, #52), so on a clean checkout every
+        # CSS Module import is TS2307. Locally it was masked by a running dev server regenerating the
+        # file, which is why the gate belongs in the npm script rather than in this workflow (#74).
         run: npm run typecheck
       - name: Test
         run: npm test --if-present
