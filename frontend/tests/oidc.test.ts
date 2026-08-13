@@ -201,3 +201,84 @@ describe("assertIdTokenMatches", () => {
     ).toThrow(/issuer/);
   });
 });
+
+describe("a non-loopback http issuer (#79)", () => {
+  const KC = "http://keycloak:8080/realms/acme";
+
+  /** The provider document the dev Keycloak in `docs/auth-keycloak.md` actually serves. */
+  function mockKeycloak() {
+    server.use(
+      http.get(`${KC}/.well-known/openid-configuration`, () =>
+        HttpResponse.json({
+          issuer: KC,
+          authorization_endpoint: `${KC}/protocol/openid-connect/auth`,
+          token_endpoint: `${KC}/protocol/openid-connect/token`,
+          end_session_endpoint: `${KC}/protocol/openid-connect/logout`,
+          code_challenge_methods_supported: ["S256"],
+        }),
+      ),
+    );
+  }
+
+  it("is refused by default", async () => {
+    // The shipped default stays exactly as strict as it is today.
+    await withEnv({ APP_BASE_URL: "http://localhost:3000" }, async () => {
+      const { fetchOpenIdConfiguration } = await import("@/lib/oidc");
+      mockKeycloak();
+
+      await expect(fetchOpenIdConfiguration(KC)).rejects.toThrow(/must be https/);
+    });
+  });
+
+  it("is accepted when development explicitly opts in", async () => {
+    // `docs/auth-keycloak.md` requires this exact hostname: the issuer must be one string that means
+    // the same Keycloak to the browser, the Next server and Django, which rules out `localhost` —
+    // inside a container that is the container. Without an opt-in the documented setup cannot work.
+    await withEnv(
+      { APP_BASE_URL: "http://localhost:3000", OIDC_ALLOW_INSECURE_ISSUER: "1" },
+      async () => {
+        const { fetchOpenIdConfiguration } = await import("@/lib/oidc");
+        mockKeycloak();
+
+        const provider = await fetchOpenIdConfiguration(KC);
+
+        expect(provider.authorizationEndpoint).toBe(`${KC}/protocol/openid-connect/auth`);
+      },
+    );
+  });
+
+  it("is refused even with the opt-in once the app itself is on TLS", async () => {
+    // The load-bearing half. An https deployment must never accept an http issuer, whatever the
+    // flag says — otherwise one stray environment variable downgrades a production login to
+    // cleartext, and the flag becomes a footgun rather than a development convenience.
+    await withEnv(
+      { APP_BASE_URL: "https://app.tenantiq.example", OIDC_ALLOW_INSECURE_ISSUER: "1" },
+      async () => {
+        const { fetchOpenIdConfiguration } = await import("@/lib/oidc");
+        mockKeycloak();
+
+        await expect(fetchOpenIdConfiguration(KC)).rejects.toThrow(/must be https/);
+      },
+    );
+  });
+
+  it("does not need the opt-in for a loopback issuer", async () => {
+    const local = "http://localhost:8080/realms/acme";
+    await withEnv({ APP_BASE_URL: "http://localhost:3000" }, async () => {
+      const { fetchOpenIdConfiguration } = await import("@/lib/oidc");
+      server.use(
+        http.get(`${local}/.well-known/openid-configuration`, () =>
+          HttpResponse.json({
+            issuer: local,
+            authorization_endpoint: `${local}/protocol/openid-connect/auth`,
+            token_endpoint: `${local}/protocol/openid-connect/token`,
+            end_session_endpoint: `${local}/protocol/openid-connect/logout`,
+            code_challenge_methods_supported: ["S256"],
+          }),
+        ),
+      );
+
+      await expect(fetchOpenIdConfiguration(local)).resolves.toBeTruthy();
+    });
+  });
+});

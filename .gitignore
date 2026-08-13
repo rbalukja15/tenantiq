@@ -30,6 +30,9 @@ next-env.d.ts
 .idea/
 .vscode/
 
+# Local compose overrides — the conventional per-machine escape hatch; never part of a change.
+docker-compose.override.yml
+
 # Claude Code (local settings / permissions, and machine-specific dev-server paths)
 .claude/settings.local.json
 .claude/launch.json

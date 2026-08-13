@@ -124,6 +124,12 @@ services:
       # This app's own public origin, as the browser sees it. Used for the OIDC redirect_uri and as
       # the Origin every state-changing request must match.
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      # Dev-only (#79). The local Keycloak is served over plain http on the host `keycloak`, which
+      # `lib/oidc.ts` refuses by default because it is not loopback — so the setup in
+      # docs/auth-keycloak.md cannot work without this. It only widens which http issuers are
+      # accepted while the app itself is on http; once APP_BASE_URL is https the guard refuses an
+      # http issuer regardless. Unset by default, so a deployment that does nothing stays strict.
+      OIDC_ALLOW_INSECURE_ISSUER: ${OIDC_ALLOW_INSECURE_ISSUER:-}
     volumes:
       - "./frontend:/app"
       - "/app/node_modules" # keep the image's install; don't shadow with the host's

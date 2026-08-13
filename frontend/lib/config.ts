@@ -46,6 +46,22 @@ export const appBaseUrl = memoize(() => required("APP_BASE_URL"));
 export const cookieSecure = memoize(() => new URL(appBaseUrl()).protocol === "https:");
 
 /**
+ * Development opt-in: permit an OIDC issuer served over plain **http** on a non-loopback host (#79).
+ *
+ * `docs/auth-keycloak.md` requires the local realm's issuer to be `http://keycloak:8080/...`, and it
+ * has to be: the issuer is one string that must resolve to the same Keycloak from the browser, the
+ * Next server *and* Django, which rules out `localhost` — inside a container that is the container.
+ * The https guard in `lib/oidc.ts` allows http only for loopback, so the documented setup could not
+ * work at all until this existed.
+ *
+ * Server-only, and deliberately **not** `NEXT_PUBLIC_`: nothing about it belongs in the browser
+ * bundle. It only ever *widens* which http issuers are acceptable while the app itself is on plain
+ * http; `assertUsableEndpoint` keeps "the app is not on TLS" as an outer condition this cannot
+ * reach, so an https deployment refuses an http issuer no matter how this is set.
+ */
+export const allowInsecureIssuer = memoize(() => process.env.OIDC_ALLOW_INSECURE_ISSUER === "1");
+
+/**
  * Cookie names, `__Host-` prefixed when the deployment is https.
  *
  * The prefix is what forbids a `Domain` attribute, and a `Domain` attribute is the only way a

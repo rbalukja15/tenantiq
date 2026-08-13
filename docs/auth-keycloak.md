@@ -27,7 +27,7 @@ docker compose --profile dev up keycloak   # admin console at http://keycloak:80
 Log in with `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` (see `.env.example`).
 
 Without the hosts entry the login redirect fails in the browser; with `localhost` as the issuer
-instead, the *frontend container* cannot fetch the provider metadata and sign-in fails server-side.
+instead, the _frontend container_ cannot fetch the provider metadata and sign-in fails server-side.
 
 ## 2. Create a realm (one per tenant)
 
@@ -41,9 +41,21 @@ from each request's Host header, so the browser and the Next server would be tol
 issuers and one of them would always mismatch. In production the issuer must be `https`; the
 `http://keycloak:8080/...` value above is dev-only.
 
+> **Set `OIDC_ALLOW_INSECURE_ISSUER=1` in `.env`** (it is already in `.env.example`). The frontend's
+> OIDC guard allows a plain-`http` issuer only for _loopback_ hostnames, and `keycloak` deliberately
+> is not one — so without this opt-in every sign-in fails with "Sign-in is temporarily unavailable"
+> and the real reason (`authorization_endpoint must be https`) is only visible in the server log.
+> This was #79: the guard and this document contradicted each other, and local sign-in was
+> impossible from the day the guard landed.
+>
+> The flag only widens which **http** issuers are accepted _while the app itself is on http_. Once
+> `APP_BASE_URL` is `https`, an http issuer is refused regardless — so it cannot be used to downgrade
+> a real deployment. Never set it in one anyway.
+
 ## 3. Create a client
 
 In the realm, create a client (e.g. `tenantiq-acme`):
+
 - Client authentication: **Off (public)**. The M4 frontend signs in with Authorization Code +
   PKCE (S256) and sends **no client secret** — turning this On makes the token exchange fail with
   `invalid_client`, and `Tenant` has no field to store a secret in (ADR-0013 §1).

@@ -854,3 +854,41 @@ Now it does, and it removes the raw upload too.
 
 289 backend tests on Postgres (251 + 38 Postgres-only), which is where the FK cascade is actually
 exercised under forced RLS. No migration: no model changed.
+
+## 2026-08-13 — M4 #79: local sign-in was impossible (OIDC https guard vs the documented issuer)
+
+Found by trying to actually use the app. Following `docs/auth-keycloak.md` to the letter and
+submitting the login form gives "Sign-in is temporarily unavailable" — and the real reason is only
+in the server log, because the route catches everything and redirects:
+
+```
+Error: authorization_endpoint must be https (got http://keycloak:8080)
+```
+
+Two halves of the project contradicted each other. `docs/auth-keycloak.md` requires the issuer to be
+`http://keycloak:8080/realms/<slug>`, and argues the point carefully: the issuer is one string that
+must resolve to the same Keycloak from the browser, the Next server *and* Django, which rules out
+`localhost`, because inside a container that is the container. Meanwhile `lib/oidc.ts` (#18) permits
+plain http only for loopback hostnames. `keycloak` is not loopback, so every sign-in died before the
+redirect, with no flag and no escape hatch.
+
+CI never had a chance: token verification is injectable and the suite signs its own tokens with a
+local key, deliberately, so nothing ever fetched a real `.well-known/openid-configuration`. The
+fingerprint is in the PR history — #18, #74 and #19 each note that the signed-in shell has no
+screenshot *because it needs a live IdP session*. Nobody had run the flow end to end since the guard
+was written, so a green suite sat on top of a login that could not work.
+
+The fix is an explicit development opt-in, `OIDC_ALLOW_INSECURE_ISSUER`, default off. The important
+part is where it sits in the condition: `!cookieSecure()` stays the **outer** term, so the flag only
+widens which http issuers are accepted *while the app itself is on http*. Once `APP_BASE_URL` is
+https an http issuer is refused whatever the flag says — otherwise one stray environment variable
+would downgrade a production login to cleartext, and a convenience would have become a footgun. That
+is a test, not a comment.
+
+Verified the way the bug was found: `POST /api/auth/login` now answers 303 to a real Keycloak
+authorize URL with PKCE S256, instead of bouncing back to `/login?error=unavailable`.
+
+One more gap surfaced alongside it, recorded on the issue rather than fixed here:
+`docker-compose.yml`'s `x-backend-env` forwards four `TENANTIQ_*` variables while `.env.example`
+documents nine, so setting the retrieval floor, the throttles, the quotas or the chunking tunables in
+`.env` does nothing at all under `make dev` — silently.
