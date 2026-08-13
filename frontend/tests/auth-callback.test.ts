@@ -275,3 +275,42 @@ describe("GET /api/auth/callback — cookie flags", () => {
     });
   });
 });
+
+describe("redirect origin when the server is bound elsewhere (#81)", () => {
+  /**
+   * Under `docker compose` Next runs as `next dev -H 0.0.0.0`, and it derives `request.url`'s host
+   * from the bound address rather than the `Host` header. Every redirect built on `request.url` then
+   * points at `http://0.0.0.0:3000` — a *different origin* from the one the browser is using, so the
+   * session cookie just set is not sent with the follow-up request, `proxy.ts` finds no session, and
+   * the user is bounced to the login form having authenticated successfully a moment earlier.
+   *
+   * The whole suite hid this because it builds requests at APP_ORIGIN, where the two agree.
+   */
+  const BOUND = "http://0.0.0.0:3000";
+
+  /** `callback()` builds its request at APP_ORIGIN; this rebuilds the same one at the bound host. */
+  function boundCallback(): NextRequest {
+    const original = callback();
+    const url = new URL(original.url);
+    url.protocol = "http:";
+    url.host = "0.0.0.0:3000";
+    return new NextRequest(url, { headers: original.headers });
+  }
+
+  it("sends a successful sign-in to the app's own origin", async () => {
+    mockDiscovery();
+    mockTokenEndpoint();
+
+    const response = await GET(boundCallback());
+
+    expect(new URL(response.headers.get("location")!).origin).toBe(APP_ORIGIN);
+  });
+
+  it("sends a failed sign-in back to the login form on the app's own origin", async () => {
+    const response = await GET(new NextRequest(`${BOUND}/api/auth/callback?code=abc&state=nope`));
+
+    const location = new URL(response.headers.get("location")!);
+    expect(location.origin).toBe(APP_ORIGIN);
+    expect(location.pathname).toBe("/login");
+  });
+});

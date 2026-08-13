@@ -28,7 +28,7 @@ const SLUG = /^[a-z0-9-]{1,63}$/;
 
 function backToLogin(request: NextRequest, error: string): NextResponse {
   // Always an absolute URL: `NextResponse.redirect("/login")` throws `URL is malformed`.
-  return NextResponse.redirect(new URL(`/login?error=${error}`, request.url), 303);
+  return NextResponse.redirect(new URL(`/login?error=${error}`, appBaseUrl()), 303);
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {

@@ -55,7 +55,14 @@ function parseTransaction(raw: string | undefined): Transaction | null {
  * and let the live attempt finish; the stale one expires on its own within ten minutes.
  */
 function retry(request: NextRequest, { clearTx }: { clearTx: boolean }): NextResponse {
-  const response = NextResponse.redirect(new URL("/login?error=retry", request.url), 303);
+  // Built from `appBaseUrl()`, never `request.url` (#81). Under compose the server is bound with
+  // `-H 0.0.0.0` and Next takes `request.url`'s host from the bound address, not the Host header, so
+  // `new URL(path, request.url)` sends the browser to `http://0.0.0.0:3000` — a *different origin*.
+  // The session cookie is host-scoped, so it is not sent on the follow-up request and a sign-in that
+  // just succeeded lands back on this form. `appBaseUrl()` is by definition the origin the browser
+  // is on; the OIDC redirect_uri already used it, which is why only redirects *into our own app*
+  // were broken.
+  const response = NextResponse.redirect(new URL("/login?error=retry", appBaseUrl()), 303);
   if (clearTx) clearCookie(response, cookieNames().tx, txCookieOptions());
   return response;
 }
@@ -99,7 +106,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       createdAt: Date.now(),
     });
 
-    const response = NextResponse.redirect(new URL("/", request.url), 303);
+    const response = NextResponse.redirect(new URL("/", appBaseUrl()), 303);
     response.cookies.set(cookieNames().session, id, sessionCookieOptions());
     // The readable half of the double-submit pair, minted once per session.
     response.cookies.set(cookieNames().csrf, mintCsrfToken(), csrfCookieOptions());

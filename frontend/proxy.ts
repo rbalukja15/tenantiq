@@ -18,11 +18,11 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 
-import { cookieNames } from "@/lib/config";
+import { appBaseUrl, cookieNames } from "@/lib/config";
 
 export function proxy(request: NextRequest): NextResponse {
   if (request.cookies.has(cookieNames().session)) return NextResponse.next();
-  return NextResponse.redirect(new URL("/login", request.url));
+  return NextResponse.redirect(new URL("/login", appBaseUrl()));
 }
 
 export const config = {
