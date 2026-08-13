@@ -10,7 +10,16 @@ export type Source = {
   chunkId: number;
   startOffset: number;
   endOffset: number;
-  similarity: number;
+  /**
+   * Retrieval distance, when it is known.
+   *
+   * Optional because **no API supplies it**: neither the answer stream's citations frame nor
+   * `GET /api/chunks/<id>` carries a score — it lives only on the backend's internal retrieval
+   * `Source` and is never serialised. Requiring it made this type unbuildable from real data, and
+   * a placeholder `0` would put a fabricated measurement in the one panel whose entire purpose is
+   * being checkable. Absent means the row is simply not shown.
+   */
+  similarity?: number;
 };
 
 type Props = {
@@ -67,7 +76,7 @@ export function SourceCard({ source, active = false, onSelect }: Props) {
         <span>
           {source.startOffset}–{source.endOffset}
         </span>
-        <span>sim {source.similarity.toFixed(2)}</span>
+        {source.similarity !== undefined && <span>sim {source.similarity.toFixed(2)}</span>}
       </p>
     </article>
   );

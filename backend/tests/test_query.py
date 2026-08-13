@@ -28,6 +28,7 @@ from app.generation import (
     TokenEvent,
     stream_grounded_answer,
 )
+from app.views import _sse_frame
 from app.models import Chunk, Document, Tenant
 from app.rag import AssembledContext, Source, build_grounded_prompt
 from app.tenant_context import tenant_context
@@ -338,3 +339,42 @@ def test_query_endpoint_cannot_surface_or_cite_another_tenants_chunks(
     assert not (cited_ids & acme_ids)  # never cites Acme's chunks...
     body = "".join(json.dumps(d) for _, d in frames)
     assert "ACMESECRET" not in body  # ...and Acme's chunk text never reaches the stream
+
+
+# --- Is this a refusal, or an answer that happened to cite nothing? (#19) --------------------------
+
+
+def test_a_refusal_is_marked_as_one_on_the_stream():
+    """The streaming path must say *why* it has no citations (#19).
+
+    ``GroundedAnswer`` (the non-streaming #15 path) has carried ``refused`` since it was written;
+    the stream dropped it, and the two cases it collapses are not the same thing at all: refusing
+    for lack of evidence is the product working, while an answer whose ``[n]`` markers all failed to
+    resolve is an answer. A client that cannot tell them apart has to guess, and the only available
+    guess — matching the refusal wording — silently breaks the moment that copy is edited.
+    """
+    ctx = _context(sources=())
+    events = list(stream_grounded_answer(ctx, llm=_ExplodingLLM()))
+
+    assert next(e for e in events if isinstance(e, CitationsEvent)).refused is True
+
+
+def test_an_answer_that_resolves_no_citations_is_not_a_refusal():
+    # The discriminating case, and the reason a flag is needed rather than `citations == []`: the
+    # model answered from real retrieved sources but cited only a number that does not exist.
+    ctx = _context((_source(1, chunk_id=11),))
+    llm = _StreamingLLM(["The term is net 30 [9]."])
+
+    events = list(stream_grounded_answer(ctx, llm=llm))
+    citations = next(e for e in events if isinstance(e, CitationsEvent))
+
+    assert citations.citations == ()  # nothing resolved...
+    assert citations.refused is False  # ...but the model was asked and answered
+
+
+def test_the_refusal_flag_reaches_the_wire():
+    refusal = _sse_frame(CitationsEvent(citations=(), refused=True))
+    answered = _sse_frame(CitationsEvent(citations=()))
+
+    assert json.loads(refusal.split("data: ", 1)[1])["refused"] is True
+    assert json.loads(answered.split("data: ", 1)[1])["refused"] is False

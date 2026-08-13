@@ -22,7 +22,7 @@ A production-shaped RAG system built in the open — one reviewed PR per issue, 
 - **Engineered like a product.** Async ingestion (parse → chunk → embed) with retries and observability, and a one-command Docker stack (`make dev`) that brings up the whole system.
 - **Decisions are written down.** Six [Architecture Decision Records](docs/adr) explain the *why* behind the stack, isolation model, chunking, embeddings, and deployment.
 
-**Status:** M0–M2 complete (auth + two-layer isolation, full ingestion pipeline); M3 (RAG query engine) in progress. See the [Roadmap](#roadmap).
+**Status:** M0–M3 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers); M4 (frontend) in progress. See the [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -71,8 +71,8 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - **M0** ✅ Project setup & documentation foundation
 - **M1** ✅ Auth & multi-tenancy — two-layer tenant isolation, proven by tests
 - **M2** ✅ Document ingestion pipeline — parse, chunk, embed, with retries & observability
-- **M3** 🚧 RAG query engine — retrieval hardening landed; query API & citations next
-- **M4** ⬜ Frontend & streaming UX
+- **M3** ✅ RAG query engine — retrieval hardening, grounded generation, SSE streaming, guardrails, per-tenant limits & cost accounting
+- **M4** 🚧 Frontend & streaming UX — app shell + OIDC via a BFF, design system, and the streaming ask screen with clickable citations
 - **M5** ⬜ Evaluation harness (`make eval`)
 - **M6** 🚧 Deployment & CI/CD — one-command Docker Compose stack landed
 - **M7** ⬜ Observability & cost dashboard

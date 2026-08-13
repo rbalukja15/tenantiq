@@ -18,13 +18,20 @@ import styles from "./NoEvidence.module.css";
 export function NoEvidence({ question }: { question?: string }) {
   return (
     /*
-     * A named region with the announcement scoped to the heading — not `role="status"` on the whole
-     * section. `status` carries an implicit `aria-atomic="true"`, so the heading, the paragraph and
-     * both list items would be flattened into one utterance with their structure discarded, and the
-     * explicit role would also override the section's implicit `region` role.
+     * A named region, and deliberately **not** a live region of any kind.
+     *
+     * `role="status"` on the section would carry an implicit `aria-atomic="true"`, flattening the
+     * heading, the paragraph and both list items into one structureless utterance — and it would
+     * override the section's implicit `region` role. The narrower fix this originally shipped with,
+     * `aria-live` on the heading alone, turned out to announce nothing at all: a live region only
+     * reports mutations made *after* it is registered, and this whole subtree is inserted into the
+     * DOM already containing its text, so there is no mutation to report (#19).
+     *
+     * Announcing a refusal is therefore the caller's job, through a region that is already mounted
+     * when the refusal happens — see `AskScreen`.
      */
     <section className={styles.wrap} aria-labelledby="no-evidence-heading">
-      <h2 id="no-evidence-heading" className={styles.heading} aria-live="polite">
+      <h2 id="no-evidence-heading" className={styles.heading}>
         No supporting passage found
       </h2>
       <p className={styles.body}>

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/app/components/ui/Button";
+import { readCsrfToken } from "@/lib/csrf-client";
 import { useState } from "react";
 
 /**
@@ -21,13 +22,15 @@ export function LogoutButton() {
   async function signOut() {
     setBusy(true);
     try {
-      const csrf = document.cookie
-        .split("; ")
-        .find((entry) => entry.split("=")[0].endsWith("tiq_csrf"))
-        ?.split("=")[1];
+      // Via the shared reader (#19), not an inline suffix match. `endsWith("tiq_csrf")` also accepts
+      // `evil_tiq_csrf` — a name any sibling subdomain can write — and sending that token makes the
+      // proxy answer 403, at which point this handler's fallback pushes the user to /login while the
+      // session cookie and its server-side record both survive. That is threat-model T13 exactly: a
+      // sign-out that does not sign out, on a shared machine.
+      const csrf = readCsrfToken();
       const response = await fetch("/api/auth/logout", {
         method: "POST",
-        headers: csrf ? { "x-csrf-token": csrf } : {},
+        headers: csrf !== null ? { "x-csrf-token": csrf } : {},
       });
       const body = (await response.json()) as { location?: string };
       if (body.location) {

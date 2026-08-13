@@ -61,6 +61,22 @@ describe("LogoutButton", () => {
     expect(seen[0].csrf).toBe("the-token");
   });
 
+  it("is not fooled by a cookie whose name merely ends with the real one", async () => {
+    // T13, reached a different way. `endsWith("tiq_csrf")` also matches `evil_tiq_csrf`, a name any
+    // sibling subdomain can write (cookie scope is same-*site*). Send that and the proxy answers
+    // 403; this handler's fallback then pushes the user to /login while the session cookie and its
+    // server-side record both survive — a sign-out that did not sign out, on a shared machine.
+    document.cookie = "evil_tiq_csrf=planted; path=/";
+    document.cookie = "tiq_csrf=the-token; path=/";
+    stubNavigation();
+    const seen = mockLogout();
+
+    render(<LogoutButton />);
+    await userEvent.click(screen.getByRole("button", { name: /sign out/i }));
+
+    expect(seen[0].csrf).toBe("the-token");
+  });
+
   it("navigates to the IdP end-session URL the server returns", async () => {
     // A real navigation, not a client-side route change: the target is usually another origin, and
     // letting fetch follow it would leave the address bar put and the IdP session alive.

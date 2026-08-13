@@ -855,6 +855,77 @@ Now it does, and it removes the raw upload too.
 289 backend tests on Postgres (251 + 38 Postgres-only), which is where the FK cascade is actually
 exercised under forced RLS. No migration: no model changed.
 
+## 2026-08-13 — M4 #19: streaming chat UI with citation rendering (ADR-0016)
+
+The signature screen: ask, watch the answer arrive, check it against the passages it came from. The
+plumbing was the easy part; three things were not.
+
+**A chunk boundary can fall anywhere.** The answer is consumed with `fetch` + `ReadableStream` —
+`EventSource` is GET-only and cannot send the CSRF header a POST through the BFF needs — so the SSE
+wire format is parsed in the client. That parser is the one piece where "it worked when I tried it"
+is worth nothing: locally the whole answer usually arrives in a single chunk, so every split-related
+bug stays invisible. It is tested against splits placed mid-JSON, between the event and data lines,
+inside the terminating blank line, and inside a UTF-8 sequence — that last one decodes `£30` as `£30`
+if each chunk is decoded independently, which would silently corrupt an answer quoting a contract.
+
+**Citations are the terminal frame**, so while the answer is streaming nothing is yet known to
+resolve. A marker therefore becomes a chip only once it does, and an `[n]` the model invented — which
+ADR-0008 already drops from the citations list — stays as literal text. That is the honest rendering:
+a citation you can click that leads nowhere is exactly what this product claims not to produce.
+
+**A refusal was indistinguishable from a thin answer.** The no-context path emitted the refusal
+sentence plus an empty citations frame; an answer whose markers all failed to resolve emitted the
+identical shape. #74 built a dedicated refusal state precisely so it would not be improvised here,
+and then it could not be detected. The only client-side tell was matching the refusal wording, which
+couples the UI to backend copy and breaks silently when it is edited — so `CitationsEvent` gained a
+`refused` flag. It is a backend change inside a frontend issue, and it is restored parity rather than
+a new idea: `GroundedAnswer` (#15) has carried the same flag since it was written; only the streaming
+path dropped it.
+
+Two things the map of the existing code turned up before a line was written. `SourceCard.similarity`
+was typed as required by #74 and **no API supplies it** — it lives only on the backend's internal
+retrieval `Source` and is never serialised, so the component threw a `TypeError` on the first real
+citation. It is optional now, and an absent score renders nothing rather than a fabricated `0.00`
+sitting in the panel whose entire purpose is being checkable. And the obvious way to read the CSRF
+cookie — `name.endsWith("tiq_csrf")`, to cover the optional `__Host-` prefix — also accepts
+`evil_tiq_csrf`, a name a sibling subdomain can write, since cookie scope is same-*site*. Exact names
+close it.
+
+Not built, deliberately: the mockup's meta strip ("5 chunks retrieved · min similarity 0.61 ·
+model · 1.9 s"). None of it is on the wire, and inventing it would be the exact fabrication this
+project exists to avoid. It needs a wider stream, which is its own issue.
+
+295 frontend tests (65 new), 254 backend.
+
+The adversarial review earned its keep twice over. Its scratch probes found that `resolveEvidence`
+goes to real trouble to separate a 404 (the chunk is genuinely gone) from any other failure — and the
+call site threw that away with `.catch(() => null)`, so a transient 500 rendered as "the document has
+been deleted". The UI stating something false about a tenant's data, caused by the most natural-
+looking line in the file. It also found that a stream ending *before* its terminal frame rendered as
+a finished answer, which is the worst failure this screen can have: truncated text that looks whole.
+
+Then the review proper confirmed six more. The sharpest was not in the new code at all: `LogoutButton`
+still read the CSRF cookie with `name.endsWith("tiq_csrf")` — the exact match this issue added
+`readCsrfToken` to replace, and documented, and tested against. The repo would have shipped the
+correct reader and the bug it was written to fix side by side, with the bug on the sign-out path.
+That is threat-model T13 reached a second way: send a shadowing `evil_tiq_csrf` planted by a sibling
+subdomain, the proxy answers 403, the handler's fallback pushes to `/login`, and the session cookie
+and its server-side record both survive. Related: `readCsrfToken` itself took whichever name appeared
+first, so a planted unprefixed cookie could beat the unforgeable `__Host-` one and 403 every question
+until removed. It prefers the prefixed name now.
+
+Two accessibility findings were the highest severity and both were real. `aria-live` on the streaming
+answer re-announces the entire text on every token, so a listener hears the answer restart dozens of
+times and never reaches the end — and the refusal's `aria-live`, added in #74, announced *nothing*,
+because a live region only reports mutations made after it is registered and that subtree arrives
+with its text already in it. One always-mounted status region replaced both.
+
+Thirteen verifier agents died on a session limit mid-run, so the streaming-correctness and
+React lenses are only partly verified; their unverified findings were not acted on.
+
+303 frontend tests, 293 backend on Postgres. Eight mutations, each caught by its intended test —
+after the mutation harness itself was caught lying: piping vitest through `tail` makes the pipeline
+exit code `tail`'s, so seven of eight reported SURVIVED when they had in fact been caught.
 ## 2026-08-13 — M4 #79: local sign-in was impossible (OIDC https guard vs the documented issuer)
 
 Found by trying to actually use the app. Following `docs/auth-keycloak.md` to the letter and
