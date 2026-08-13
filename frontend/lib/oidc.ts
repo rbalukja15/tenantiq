@@ -12,7 +12,7 @@
  * credential. That is the RFC 9700 posture for browser-delivered flows.
  */
 
-import { apiBaseUrl, cookieSecure } from "@/lib/config";
+import { apiBaseUrl, allowInsecureIssuer, cookieSecure } from "@/lib/config";
 
 export type TenantOidcConfig = { issuer: string; clientId: string };
 
@@ -134,7 +134,11 @@ function assertUsableEndpoint(raw: string | undefined, name: string): string {
     throw new OidcError(`provider metadata has a non-absolute ${name}`);
   }
   const loopback = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname);
-  const httpAllowed = url.protocol === "http:" && loopback && !cookieSecure();
+  // `!cookieSecure()` stays the OUTER condition, and the opt-in cannot reach it: once the app is
+  // served over TLS an http issuer is refused however the flag is set. Otherwise a single stray
+  // environment variable would downgrade a production login to cleartext (#79).
+  const httpAllowed =
+    url.protocol === "http:" && (loopback || allowInsecureIssuer()) && !cookieSecure();
   if (url.protocol !== "https:" && !httpAllowed) {
     throw new OidcError(`${name} must be https (got ${url.protocol}//${url.host})`);
   }
