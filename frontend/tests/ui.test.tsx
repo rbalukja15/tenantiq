@@ -150,6 +150,20 @@ describe("SourceCard", () => {
     similarity: 0.8312,
   };
 
+  it("renders without a similarity score, because no API supplies one", () => {
+    // #51's citations frame and chunk endpoint both omit similarity — it exists only on the
+    // backend's internal Source dataclass. Requiring it here made the type unbuildable from real
+    // data, and rendering `undefined.toFixed(2)` threw. Absent means absent: no "sim" row at all,
+    // rather than a fabricated 0.00 sitting in the evidence panel looking like a measurement.
+    const { similarity, ...withoutScore } = source;
+    void similarity;
+
+    render(<SourceCard source={withoutScore} />);
+
+    expect(screen.getByText(withoutScore.quote)).toBeInTheDocument();
+    expect(screen.queryByText(/sim/i)).toBeNull();
+  });
+
   it("shows the stored chunk text verbatim", () => {
     // The product's central claim is that a citation resolves to real text. Truncating or tidying
     // the quote here would quietly defeat that, so the whole string must be present.

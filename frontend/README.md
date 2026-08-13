@@ -100,3 +100,21 @@ npm run build     # the only check that exercises the real Next/React compile pa
 Route handlers are tested by calling them directly as `(NextRequest) => Response`. MSW intercepts
 their server-side `fetch`, and an unmocked request **fails the suite** — which is what lets a test
 assert that a rejected request contacted nothing at all.
+
+## Streaming an answer
+
+`POST /api/query` returns Server-Sent Events (ADR-0009): token deltas, then one terminal frame —
+either `citations` or `error`. The browser cannot use `EventSource` for it: that API is GET-only and
+cannot set headers, and this is a `POST` carrying the BFF's `x-csrf-token`. So the stream is read
+with `fetch` + `ReadableStream`, and the wire format is parsed in `lib/sse.ts`.
+
+Two rules in `lib/answer.ts` and `lib/query.ts` are load-bearing rather than stylistic (ADR-0016):
+
+- **A `[n]` becomes a clickable citation only once it resolves.** Citations are the _terminal_ frame,
+  so nothing is a chip while the answer is still arriving, and a number the model invented stays as
+  plain text forever. A chip that resolves to nothing is the one thing this UI must never render.
+- **A refusal is read from a flag, never from the prose.** The stream says `refused: true`; matching
+  the refusal wording instead would break silently the day that sentence is reworded.
+
+When testing anything here, split the mock stream across chunk boundaries on purpose — a single-chunk
+response exercises none of the parsing that actually breaks in production.

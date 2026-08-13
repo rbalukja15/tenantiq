@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { AskScreen } from "@/app/components/AskScreen";
 import { TenantHome } from "@/app/components/TenantHome";
 import { ensureFreshSession } from "@/lib/session-refresh";
 import { getSessionFromCookieStore } from "@/lib/session-server";
@@ -29,5 +30,15 @@ export default async function Home() {
   // On `unavailable` (the IdP is briefly unreachable) we deliberately proceed with the token we
   // already hold rather than logging the user out: it may still be valid, and if it is not, Django
   // answers 401 and `TenantHome` redirects. Degrading to one failed render beats ending the session.
-  return <TenantHome accessToken={outcome.record.accessToken} />;
+  // The workspace header, then the ask screen — the product's signature surface, and the reason the
+  // shell exists (#19). `AskScreen` is a Client Component and is rendered as a sibling, never handed
+  // the access token: props crossing a "use client" boundary are serialised into the RSC payload and
+  // shipped to the browser, which would put a tenant bearer token in the page source and undo the
+  // whole point of the BFF (ADR-0013 §1). It reaches the API through the same-origin proxy instead.
+  return (
+    <>
+      <TenantHome accessToken={outcome.record.accessToken} />
+      <AskScreen />
+    </>
+  );
 }

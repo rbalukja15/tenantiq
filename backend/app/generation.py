@@ -81,9 +81,19 @@ class TokenEvent:
 
 @dataclass(frozen=True)
 class CitationsEvent:
-    """The terminal event of a stream: the citations resolved from the answer's ``[n]`` markers."""
+    """The terminal event of a stream: the citations resolved from the answer's ``[n]`` markers.
+
+    ``refused`` distinguishes the two ways this event can carry an empty tuple, which are not the
+    same thing (#19). Refusing for lack of retrieved evidence is the product working as designed;
+    an answer whose ``[n]`` markers all failed to resolve is still an answer. A client has to render
+    them differently — one is a "no supporting passage found" state, the other is prose — and
+    without this flag its only way to tell would be matching the refusal wording, which breaks
+    silently the moment that copy is edited. ``GroundedAnswer`` (#15) has always carried the same
+    flag; the streaming path simply dropped it.
+    """
 
     citations: tuple[Citation, ...]
+    refused: bool = False
 
 
 @dataclass(frozen=True)
@@ -143,7 +153,7 @@ def stream_grounded_answer(
     """
     if not context.has_context:
         yield TokenEvent(text=_REFUSAL_TEXT)
-        yield CitationsEvent(citations=())
+        yield CitationsEvent(citations=(), refused=True)
         return
 
     llm = llm if llm is not None else get_llm()

@@ -304,7 +304,11 @@ def _sse_frame(event: TokenEvent | CitationsEvent | ErrorEvent) -> str:
     if isinstance(event, TokenEvent):
         return f"event: token\ndata: {json.dumps({'text': event.text})}\n\n"
     if isinstance(event, CitationsEvent):
-        payload = {"citations": [asdict(citation) for citation in event.citations]}
+        payload = {
+            "citations": [asdict(citation) for citation in event.citations],
+            # Always present, so a client reads a boolean rather than inferring one from absence.
+            "refused": event.refused,
+        }
         return f"event: citations\ndata: {json.dumps(payload)}\n\n"
     return f"event: error\ndata: {json.dumps({'message': event.message})}\n\n"
 
