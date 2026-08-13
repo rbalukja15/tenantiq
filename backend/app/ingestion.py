@@ -52,6 +52,22 @@ def _user_safe_message(exc: BaseException) -> str:
     return "The document could not be processed. Please try again later."
 
 
+def _abandon(document_id: int, tenant_id) -> None:
+    """The document is gone: the tenant deleted it while ingestion was in flight (#51).
+
+    Deletion deliberately does not wait for PROCESSING to finish — a wedged document has to stay
+    deletable — so the worker can find the row missing at either phase. Raising here would be wrong
+    twice over: the task retries on any exception, so it would burn three backed-off runs re-reading
+    a row that will never come back, and ``on_failure`` would then record a terminal failure for a
+    document the tenant removed on purpose. There is nothing left to do, so stop.
+    """
+    logger.info(
+        "Ingestion abandoned: document %s (tenant %s) was deleted before it completed.",
+        document_id,
+        tenant_id,
+    )
+
+
 def run_ingestion(document_id: int, tenant_id) -> None:
     tenant = Tenant.objects.get(id=tenant_id)  # Tenant is not tenant-owned; readable un-scoped
 
@@ -60,7 +76,9 @@ def run_ingestion(document_id: int, tenant_id) -> None:
     # describes the latest outcome. Committing this *before* the risky work means a transient
     # failure below (which rolls the work back) can't erase the fact that we tried.
     with tenant_context(tenant):
-        doc = Document.objects.get(id=document_id)
+        doc = Document.objects.filter(id=document_id).first()
+        if doc is None:
+            return _abandon(document_id, tenant_id)
         doc.status = Document.Status.PROCESSING
         doc.attempts += 1
         doc.error = ""
@@ -70,7 +88,9 @@ def run_ingestion(document_id: int, tenant_id) -> None:
     # *permanent* failure (record it, no retry); any other error propagates so the task retries a
     # *transient* failure, rolling back any partial chunk writes with it.
     with tenant_context(tenant):
-        doc = Document.objects.get(id=document_id)
+        doc = Document.objects.filter(id=document_id).first()
+        if doc is None:
+            return _abandon(document_id, tenant_id)
         try:
             with doc.file.open("rb") as handle:
                 text = extract_text(handle, doc.content_type)

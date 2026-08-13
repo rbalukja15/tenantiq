@@ -805,3 +805,52 @@ generates and `.gitignore` excludes (#52) — so on a clean checkout it does not
 because a `next dev` server had been running the whole time quietly regenerating it, and before this
 issue nothing imported a CSS Module, so the gap was invisible. `npm run typecheck` runs
 `next typegen` first now; verified by reproducing all fifteen errors with the dev server stopped.
+
+## 2026-08-13 — M4 #51: document detail/delete + citation resolution (ADR-0015)
+
+#19 was next, but it turned out not to be buildable yet, and the issue said so itself: "#19 (citation
+rendering) needs a way to resolve a citation to its chunk/source". The citations frame a streamed
+answer closes with carries `chunk_id`, the document and the character offsets — and no text
+(`app.generation.Citation`, ADR-0008). So #19 would have received an answer whose `[1]` markers were
+addresses with nothing at the far end, and the `SourceCard` #74 built to show a quote would have had
+no quote to show. #51 first, then.
+
+`GET /api/chunks/<id>` is the far end: the stored chunk verbatim — exactly
+`source[start_offset:end_offset]` (#45) — its offsets, and the document's id and title. Never the
+embedding. Widening the SSE frame to carry the text instead was rejected in ADR-0015: it would push
+every retrieved passage down the latency-critical answer stream including the ones nobody opens, and
+put the same text in two places where a later change could make them disagree.
+
+`DELETE /api/documents/<id>` is the sharper half, because a document is three things — a row, its
+chunks (each with an embedding in the shared index), and the raw file — and deleting one or two of
+them is worse than deleting none: a chunk left behind is still retrievable, so a "deleted" document
+would go on being cited. Two decisions came out of it, both recorded in ADR-0015.
+
+**PROCESSING is not a lock.** Refusing to delete a document mid-ingestion is the tidier-looking
+option and it is wrong: ingestion can wedge (#55's sweeper does not exist yet), and a document that
+can't be deleted while wedged is one a tenant can't delete at all — exactly when they most want to.
+The cost moves to the worker, which now treats a vanished row as a normal stop. Raising there would
+have burned three backed-off retries re-reading a row that is never coming back, and then recorded a
+terminal failure for a document the tenant removed on purpose.
+
+**The row goes first; the file goes on commit.** `ATOMIC_REQUESTS` wraps the row delete in a
+transaction and storage is not in it, so every ordering has a window. File-first leaves a listed
+document pointing at bytes that no longer exist. Row-then-file-inline is worse than it looks: the row
+delete isn't durable until the response commits, so any later error rolls it back and leaves a listed
+document whose file has already been destroyed. `transaction.on_commit` makes a rollback a complete
+no-op — nothing is destroyed unless the row is genuinely gone. That ordering is a test, not a comment:
+with callbacks captured but not executed, the response is 204, the file is still there, and exactly
+one callback is queued.
+
+Seven mutations, each caught by the test that claims it — including the two that matter most, `objects`
+→ `all_objects` on both new lookups. That check earned its keep here: six of these tests passed
+*before* any code existed, because a route that isn't wired returns 404 and every isolation assertion
+was asserting 404. Nothing distinguishes a real guard from a missing URL except breaking the guard.
+
+The threat model grows T14, cross-tenant *destruction* — a shape it didn't have, since until now a
+mis-scoped lookup could only leak data, not irreversibly destroy it. T3's limit was also quietly
+false: it said deleting a document was the full PII purge at a time when no delete endpoint existed.
+Now it does, and it removes the raw upload too.
+
+289 backend tests on Postgres (251 + 38 Postgres-only), which is where the FK cascade is actually
+exercised under forced RLS. No migration: no model changed.

@@ -3,6 +3,8 @@
 from django.urls import path
 
 from app.views import (
+    ChunkDetailView,
+    DocumentDetailView,
     DocumentListCreateView,
     DocumentRetryView,
     MeView,
@@ -17,7 +19,11 @@ urlpatterns = [
     path("api/tenants/discovery", TenantDiscoveryView.as_view(), name="tenant-discovery"),
     path("api/me", MeView.as_view(), name="me"),
     path("api/documents", DocumentListCreateView.as_view(), name="documents"),
+    path("api/documents/<int:pk>", DocumentDetailView.as_view(), name="document-detail"),
     path("api/documents/<int:pk>/retry", DocumentRetryView.as_view(), name="document-retry"),
+    # Citation resolution: a streamed answer cites a chunk id, and this turns it back into the
+    # passage the reader can check (#51, ADR-0008).
+    path("api/chunks/<int:pk>", ChunkDetailView.as_view(), name="chunk-detail"),
     path("api/query", QueryView.as_view(), name="query"),
     path("api/usage", UsageView.as_view(), name="usage"),
 ]
