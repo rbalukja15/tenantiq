@@ -29,9 +29,9 @@ from app.generation import (
     get_llm,
     stream_grounded_answer,
 )
-from app.models import Document, Tenant
+from app.models import Chunk, Document, Tenant
 from app.rag import retrieve_context
-from app.serializers import DocumentSerializer
+from app.serializers import ChunkSerializer, DocumentSerializer
 from app.tasks import ingest_document
 from app.throttling import (
     QUERY_QUOTA_THROTTLES,
@@ -128,6 +128,85 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         # Enqueue only after the row is committed, so the worker can't race the request's
         # transaction (ATOMIC_REQUESTS). The worker has no request, so we pass the tenant id.
         transaction.on_commit(lambda: ingest_document.delay(document.id, tenant_id))
+
+
+class DocumentDetailView(generics.RetrieveDestroyAPIView):
+    """Inspect or delete one document: ``GET``/``DELETE /api/documents/<id>`` (#51).
+
+    Both resolve through the tenant-scoped ``Document.objects`` manager (ADR-0002), so another
+    tenant's id is a 404 — the same response as an id that never existed, so neither verb can be used
+    to probe for the existence of someone else's document.
+
+    **Delete means gone**: the row, the chunks it was split into (FK cascade), and the raw file on
+    storage. Leaving chunks behind would be the worst of the three — their vectors stay in the index,
+    so a "deleted" document would go on being retrieved and cited.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = DocumentSerializer
+
+    def get_throttles(self):
+        # A DELETE is charged against the tighter *upload* budget rather than the read budget: it is
+        # the other endpoint that writes to storage, and a destructive path should not be as cheap to
+        # hammer as a listing.
+        throttle = (
+            TenantUploadRateThrottle if self.request.method == "DELETE" else TenantReadRateThrottle
+        )
+        return [throttle()]
+
+    def get_queryset(self):
+        return Document.objects.all()
+
+    def perform_destroy(self, document: Document) -> None:
+        """Delete the row first, then the stored file once that delete has actually committed.
+
+        Ordering matters, and both alternatives are worse:
+
+        - *File first, then the row.* If the row delete then fails, the file is gone but the document
+          still lists — pointing at bytes that no longer exist.
+        - *Row first, then the file, inline.* ``ATOMIC_REQUESTS`` means the row delete is not durable
+          until the response commits, so an error after this point rolls the row back and leaves the
+          document listing with its file already destroyed.
+
+        Deleting on commit makes a rollback a complete no-op — nothing is destroyed unless the row is
+        genuinely gone. The residual risk is a crash in the moment between commit and the callback,
+        which orphans the file but never loses a referenced one.
+        """
+        storage, name = document.file.storage, document.file.name
+        document.delete()
+        if name:
+            transaction.on_commit(lambda: _delete_stored_file(storage, name))
+
+
+def _delete_stored_file(storage, name: str) -> None:
+    """Remove a deleted document's bytes, logging rather than raising if storage refuses.
+
+    This runs after the response has been committed, so raising could not tell the caller anything —
+    the document is already deleted and the client has its 204. An orphaned file is a cleanup problem
+    (hence the exception-level log); turning it into an unhandled error in the commit hook would not
+    delete it either.
+    """
+    try:
+        storage.delete(name)
+    except Exception:  # noqa: BLE001 — a storage failure must not surface after a committed delete
+        logger.exception("failed to delete stored file %s for a deleted document", name)
+
+
+class ChunkDetailView(generics.RetrieveAPIView):
+    """Resolve a citation to its evidence: ``GET /api/chunks/<id>`` (#51, consumed by #19).
+
+    A streamed answer's citations frame carries ``chunk_id`` and offsets but no text, so this is what
+    turns a ``[1]`` in the prose into a passage the reader can check. ``Chunk.objects`` is
+    tenant-scoped, so a citation can only ever be resolved by the tenant whose corpus produced it —
+    and since the chunk is scoped, the document reached through it is that tenant's by construction.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [TenantReadRateThrottle]
+    serializer_class = ChunkSerializer
+
+    def get_queryset(self):
+        return Chunk.objects.select_related("document")
 
 
 class DocumentRetryView(APIView):

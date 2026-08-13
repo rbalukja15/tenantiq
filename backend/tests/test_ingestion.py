@@ -445,3 +445,41 @@ def test_ingestion_redacts_pii_split_across_a_page_join_newline():
         joined = " ".join(Chunk.objects.filter(document=doc).values_list("text", flat=True))
     assert "123-45-6789" not in joined
     assert "[REDACTED_SSN]" in joined
+
+
+# --- A document deleted while its ingestion is in flight (#51) ------------------------------------
+
+
+def test_ingestion_of_a_deleted_document_stops_quietly():
+    # DELETE does not wait for PROCESSING to finish (#51), so the worker can find the row gone. That
+    # is not a failure: raising here would burn the task's three retries with backoff and then log a
+    # terminal error for a document the tenant deliberately removed. It must simply stop.
+    a = _tenant("acme")
+    doc = _doc(a, body=b"Enough words here to make at least a single chunk of text.")
+    document_id = doc.id
+    with tenant_context(a):
+        Document.objects.filter(id=document_id).delete()
+
+    run_ingestion(document_id, a.id)  # no exception
+
+    assert not Chunk.all_objects.filter(document_id=document_id).exists()
+
+
+def test_ingestion_stops_when_the_document_is_deleted_mid_run(monkeypatch):
+    # The narrower race: the row still existed when phase 1 claimed it and is gone by the time
+    # phase 2 opens the file. Phase 2 must not resurrect chunks for a row that no longer exists.
+    a = _tenant("acme")
+    doc = _doc(a, body=b"Enough words here to make at least a single chunk of text.")
+    document_id = doc.id
+    original_save = Document.save
+
+    def save_then_vanish(self, *args, **kwargs):
+        # Phase 1's save is the last thing that touches the row before phase 2 re-reads it.
+        original_save(self, *args, **kwargs)
+        Document.all_objects.filter(id=document_id).delete()
+
+    monkeypatch.setattr(Document, "save", save_then_vanish)
+
+    run_ingestion(document_id, a.id)  # no exception
+
+    assert not Chunk.all_objects.filter(document_id=document_id).exists()

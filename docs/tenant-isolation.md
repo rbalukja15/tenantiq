@@ -77,6 +77,12 @@ Isolation is proven by tests at every layer — a query path without a cross-ten
   policy — so a new tenant-owned table added without its RLS migration fails CI (#50).
 - `tests/test_documents_api.py` — the guarantee at the HTTP edge, plus context cleanup after the
   response.
+- `tests/test_document_detail_api.py` — the same guarantee on the API's only **destructive** route
+  (#51). A mis-scoped delete would not leak data, it would destroy someone else's, so the assertion
+  is not just "B is refused": B's 404 must leave A's row, A's chunks *and* A's stored file intact.
+- `tests/test_chunk_resolution_api.py` — citation resolution (#51). A foreign chunk id and a chunk id
+  that never existed must return the same status *and* the same body, or the endpoint becomes an
+  oracle for another tenant's corpus.
 
 The RLS tests are **skipped off Postgres**; CI runs the whole suite against pgvector Postgres as the
 non-superuser `tenantiq_app` role, so Layer 2 is exercised for real. A CI guard
