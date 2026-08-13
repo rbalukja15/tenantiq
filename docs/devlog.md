@@ -798,3 +798,10 @@ nothing, because nothing tested it. There is a `login-page.test.tsx` now, and an
 
 230 frontend tests, 227 backend. Nine mutations across the two rounds, each caught by the test that
 claims it.
+
+CI then failed on something none of that would have caught: `tsc --noEmit` could not resolve a single
+`*.module.css` import. That declaration reaches tsc only through `next-env.d.ts`, which Next
+generates and `.gitignore` excludes (#52) — so on a clean checkout it does not exist. Locally it did,
+because a `next dev` server had been running the whole time quietly regenerating it, and before this
+issue nothing imported a CSS Module, so the gap was invisible. `npm run typecheck` runs
+`next typegen` first now; verified by reproducing all fifteen errors with the dev server stopped.
