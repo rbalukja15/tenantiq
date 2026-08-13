@@ -1,0 +1,54 @@
+.scroll {
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--text-sm);
+}
+
+.caption {
+  text-align: left;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  padding-bottom: var(--space-2);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.table :global(th) {
+  text-align: left;
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border) solid var(--rule);
+  white-space: nowrap;
+}
+
+.table :global(td) {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border) solid var(--rule-soft);
+  vertical-align: middle;
+}
+
+/* Numbers line up only if they are tabular and right-aligned; both, or neither. */
+.table :global(td[data-numeric]) {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}

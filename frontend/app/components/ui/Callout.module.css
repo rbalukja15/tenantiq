@@ -1,0 +1,22 @@
+.callout {
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  /* A left stripe rather than a full tint: state should be scannable without shouting. */
+  border-left: 2px solid currentColor;
+}
+
+.error {
+  color: var(--crit);
+  background: var(--crit-wash);
+}
+
+.warning {
+  color: var(--warn);
+  background: var(--warn-wash);
+}
+
+.info {
+  color: var(--ink-muted);
+  background: var(--sunken);
+}

@@ -12,7 +12,8 @@ function request(options: {
   headerToken?: string;
 }): NextRequest {
   const headers = new Headers();
-  if (options.origin !== null && options.origin !== undefined) headers.set("origin", options.origin);
+  if (options.origin !== null && options.origin !== undefined)
+    headers.set("origin", options.origin);
   if (options.cookieToken) headers.set("cookie", `${cookieNames().csrf}=${options.cookieToken}`);
   if (options.headerToken) headers.set("x-csrf-token", options.headerToken);
   return new NextRequest(`${APP_ORIGIN}/api/documents`, { method: "POST", headers });
@@ -22,9 +23,9 @@ describe("lib/csrf", () => {
   it("accepts a same-origin request carrying a matching cookie and header", () => {
     const token = mintCsrfToken();
 
-    expect(requireCsrf(request({ origin: APP_ORIGIN, cookieToken: token, headerToken: token }))).toBe(
-      true,
-    );
+    expect(
+      requireCsrf(request({ origin: APP_ORIGIN, cookieToken: token, headerToken: token })),
+    ).toBe(true);
   });
 
   it("rejects a cross-origin request even when both halves of the token match", () => {

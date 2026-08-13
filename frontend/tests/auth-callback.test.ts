@@ -112,7 +112,9 @@ describe("GET /api/auth/callback", () => {
 
     const response = await GET(callback());
 
-    const line = response.headers.getSetCookie().find((c) => c.startsWith("tiq_session=")) as string;
+    const line = response.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("tiq_session=")) as string;
     expect(line).not.toContain("access-token");
     expect(sessionIdFrom(response)).toMatch(/^[0-9a-f-]{36}$/);
     expect(line).toMatch(/HttpOnly/);
@@ -241,7 +243,9 @@ describe("GET /api/auth/callback — cookie flags", () => {
       const response = await securedGet(new NextRequest(url, { headers }));
 
       for (const name of ["__Host-tiq_session", "__Host-tiq_csrf"]) {
-        const line = response.headers.getSetCookie().find((c) => c.startsWith(`${name}=`)) as string;
+        const line = response.headers
+          .getSetCookie()
+          .find((c) => c.startsWith(`${name}=`)) as string;
         expect(line, `missing ${name}`).toBeDefined();
         expect(line).toMatch(/Secure/);
         // __Host- forbids Domain; that prohibition is the whole reason for the prefix.

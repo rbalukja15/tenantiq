@@ -1,0 +1,184 @@
+/*
+ * Design tokens and base styles (#74, ADR-0014).
+ *
+ * This is the only global stylesheet in the app. It defines tokens and styles bare elements;
+ * everything else is a `.module.css` scoped to its component. Nothing here may define a reusable
+ * class — a global class is exactly the cascade collision CSS Modules exist to prevent.
+ *
+ * Two rules for anyone adding to this file:
+ *   1. Every colour is a token, and every token is defined in BOTH palettes. A token that exists in
+ *      light and not in dark resolves to nothing and the element renders transparent.
+ *   2. Components read tokens; they never hardcode a hex value. `tests/tokens.test.ts` enforces the
+ *      first rule and checks text contrast against WCAG AA, so a "small tweak" to a colour that
+ *      makes text unreadable fails the suite rather than shipping.
+ */
+
+:root {
+  /* --- surfaces, from furthest back to closest ------------------------------------------------ */
+  --paper: #f6f7f9; /* page ground */
+  --surface: #ffffff; /* cards, panels, rows */
+  --sunken: #edeff3; /* inset areas: toolbars, wells */
+
+  /* --- text ----------------------------------------------------------------------------------- */
+  --ink: #141a22; /* primary text */
+  --ink-muted: #4d5766; /* secondary text, labels */
+
+  /* --- lines -----------------------------------------------------------------------------------
+   * Two weights, and the distinction is a WCAG one rather than an aesthetic one. `--rule` and
+   * `--rule-soft` are decorative: card edges and row dividers, which the spec does not require to be
+   * perceivable because the component is identifiable without them. `--rule-strong` is for a boundary
+   * that *is* the control — a text input's edge — where WCAG 1.4.11 requires 3:1. Using the hairline
+   * there would make the field invisible to a low-vision user; using the strong rule everywhere would
+   * make the whole interface look like a spreadsheet.
+   */
+  --rule: #dce1e8; /* card edges, panel borders */
+  --rule-soft: #e8ecf1; /* internal dividers */
+  --rule-strong: #767f8c; /* control boundaries — must clear 3:1 */
+
+  /* --- accent: "grounded and cited", and nothing else ------------------------------------------ */
+  --accent: #12645a;
+  --accent-ink: #0b463f; /* accent text on a light wash, and hover */
+  --accent-wash: #dceded; /* tint behind citations */
+  --on-accent: #ffffff; /* text on a filled accent */
+
+  /* --- status: deliberately a separate family, so state never competes with the accent --------- */
+  --ok: #1f6b4c;
+  --ok-wash: #e2f1ea;
+  --warn: #7d5610;
+  --warn-wash: #f7eedc;
+  --crit: #94291f;
+  --crit-wash: #f7e5e3;
+
+  /* --- type ------------------------------------------------------------------------------------
+   * Three roles, each carrying meaning rather than decoration:
+   *   serif — prose: answers and source quotations. Text to be READ.
+   *   sans  — interface: chrome, labels, controls. Text to be OPERATED.
+   *   mono  — evidence: chunk ids, offsets, similarity, money. Text to be VERIFIED.
+   * System stacks on purpose: a webfont means either a network request the CSP would have to allow
+   * or a large base64 payload, and neither is worth it while the faces below are already good.
+   */
+  --font-serif:
+    ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+
+  /* --- space: a 4px scale, so spacing is chosen from a set rather than invented ---------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* --- shape: small radii suit an instrument; large ones would read as a consumer app ---------- */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --border: 1px;
+
+  /* --- measure ---------------------------------------------------------------------------------*/
+  --measure: 66ch; /* prose line length */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0e1216;
+    --surface: #141a20;
+    --sunken: #0a0e12;
+
+    --ink: #e7ecf2;
+    --ink-muted: #a3aebd;
+
+    --rule: #2a333e;
+    --rule-soft: #1b222a;
+    --rule-strong: #697687;
+
+    --accent: #6ac6b5;
+    --accent-ink: #a7ded3;
+    --accent-wash: #12312d;
+    --on-accent: #06120f;
+
+    --ok: #6cc79c;
+    --ok-wash: #102a22;
+    --warn: #dcaf5c;
+    --warn-wash: #2c2415;
+    --crit: #ec8175;
+    --crit-wash: #2e1a18;
+  }
+}
+
+/* --- base ------------------------------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark; /* native form controls and scrollbars follow the theme too */
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+a {
+  color: var(--accent-ink);
+}
+
+/* One visible focus ring for the whole app. Never remove it without providing another. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

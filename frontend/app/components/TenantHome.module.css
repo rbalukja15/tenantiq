@@ -1,0 +1,40 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: var(--measure);
+}
+
+.tenant {
+  font-size: var(--text-2xl);
+}
+
+.identity {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.identity strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.scope {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+  padding-top: var(--space-3);
+  border-top: var(--border) solid var(--rule-soft);
+}
+
+/* Mono marks the slug as an identifier — a value to be checked, not prose. */
+.slug {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent-ink);
+  background: var(--accent-wash);
+  padding: 0.1em 0.4em;
+  border-radius: var(--radius-sm);
+}

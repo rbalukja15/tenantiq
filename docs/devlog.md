@@ -694,3 +694,55 @@ hostname behaviour rather than observed; and the `globalThis`-pinned session sto
 as one instance across the callback handler, the proxy handler and the Server Component under a real
 `make dev`. The pin exists precisely so separate Next bundles cannot produce separate maps, but it is
 worth a real login before anyone trusts it in anger.
+
+## 2026-08-12 — M4 #74: a design system, and a test that can fail
+Everything #18 shipped was unstyled. That was right for an auth issue and wrong to leave standing:
+#19 and #20 each add substantial UI, and without a shared system they would each invent colours and
+spacing, leaving three visual languages and a retrofit. So this landed first.
+
+**The direction came before the CSS.** The product's differentiator is that every answer is traceable
+to a real chunk at real character offsets, so the interface is laid out like a critical edition —
+answer on one side, retrieved source on the other, joined by clickable citations. Type carries that:
+serif for prose (text to be *read*), sans for chrome (to be *operated*), mono for chunk ids, offsets
+and money (to be *verified*). Seeing mono means "this is a fact you could go and check".
+
+**CSS Modules over tokens** (ADR-0014), not Tailwind. Tailwind is what people expect and is faster
+for conventional layouts, but this design turns into arbitrary values fast — three font roles, an
+optical offset on citation markers — and the repo is meant to be *read*: `.source[data-active]` tells
+a reviewer more than a forty-class string. A single global stylesheet was the other candidate and
+loses to scoping: every class would be a global name, which is the exact collision CSS Modules
+removes for free.
+
+**The part I'd keep in any project: `tests/tokens.test.ts`.** Most CSS tests are theatre — jsdom
+doesn't apply a CSS Module, so asserting a component "got a class" proves a string moved. This one
+reads the stylesheet as data and checks the two things that *are* objective: both themes define the
+same token set, and every text pair clears WCAG AA in **both** themes. It caught something on its
+first run. I had one `--rule` used for both card edges and input borders, and it failed 3:1 against
+the surface. The interesting part was deciding it was my *assertion* that was wrong, not the colour:
+WCAG 1.4.11 requires 3:1 for boundaries that *identify a control*, not for decorative dividers. But
+the failure was still real, because I had no token that met the control requirement. Hence two line
+weights split on a WCAG boundary rather than an aesthetic one — `--rule` for card edges, and
+`--rule-strong` for a text field's border, which the test now holds to 3:1. A single hairline would
+have made every input invisible to a low-vision user; holding every divider to 3:1 would have made
+the whole app look like a spreadsheet.
+
+A token missing from one palette is also now a failure. That one is invisible in normal development:
+it resolves to nothing, and the element renders transparent — for people using the other theme only.
+
+**The refusal state ships here, not in #19.** What a reader sees when nothing clears the similarity
+floor is the most important screen in a grounded-answers product, and building it inside the chat
+component is how it becomes a grey box saying "No results". It is a primitive: set in the interface
+sans rather than the answer serif so it never reads as prose the model produced, carrying no
+citations because there is nothing to cite, and stating what to try next. A test asserts it renders
+no citation control at all — the specific way it would rot is by growing one and starting to look
+like a confident answer with the evidence collapsed.
+
+The component tests assert **semantics**, never appearance: accessible names, label associations,
+roles, and whether meaning survives without colour (a status pill states its status in words —
+WCAG 1.4.1 — so the test fails if someone reduces it to a coloured dot). Appearance is verified by
+`next build` plus screenshots, and that limit is written down rather than papered over.
+
+Seven mutations, each caught by the test that claims it. 181 frontend tests. Verified in a real
+browser at desktop and 375px in both themes, with no horizontal scroll and a clean console — the
+accent that looked wrong in a screenshot turned out to be exactly `#12645a` under `getComputedStyle`,
+which is a good reminder that a screenshot is evidence about a screenshot.
