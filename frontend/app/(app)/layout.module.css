@@ -7,11 +7,18 @@
 .header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
   background: var(--surface);
   border-bottom: var(--border) solid var(--rule);
+  flex-wrap: wrap;
+}
+
+/* The sign-out control sits hard right; the wordmark and the section nav stay together on the left,
+   which is why this is `margin-left: auto` on the last child rather than `space-between` (which
+   would push the nav into the middle of the bar the moment a third item appeared). */
+.header > *:last-child {
+  margin-left: auto;
 }
 
 .brand {

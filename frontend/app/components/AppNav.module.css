@@ -1,0 +1,26 @@
+.nav {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.link {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-decoration: none;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  /* Reserved on every link, transparent when inactive, so the current tab does not shift the row
+     down by two pixels when it changes. */
+  border-bottom: 2px solid transparent;
+}
+
+.link:hover {
+  color: var(--ink);
+  background: var(--sunken);
+}
+
+.current {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}

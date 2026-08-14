@@ -1,0 +1,66 @@
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/*
+ * `appearance: none` is required before any of this applies, and the two engines expose the bar
+ * through different pseudo-elements — WebKit/Blink splits it into ::-webkit-progress-bar (the track)
+ * and ::-webkit-progress-value (the fill), Gecko has only ::-moz-progress-bar (the fill), and the
+ * track there is the element itself. Hence the track colour set on `.bar` *and* on the WebKit track:
+ * dropping either leaves one engine with an invisible or a black bar.
+ */
+.bar {
+  appearance: none;
+  border: none;
+  inline-size: 12rem;
+  max-inline-size: 100%;
+  block-size: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken); /* the track, for Gecko and as the fallback */
+  overflow: hidden;
+}
+
+.bar::-webkit-progress-bar {
+  background: var(--sunken);
+  border-radius: var(--radius-sm);
+}
+
+.bar::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+.bar::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+/* Indeterminate: no `value`, so neither engine paints a fill. A slow sweep says "working, length
+   unknown" — stilled by the global prefers-reduced-motion rule, which leaves a plain track. */
+.bar:indeterminate {
+  background: linear-gradient(90deg, var(--sunken) 0%, var(--accent-wash) 50%, var(--sunken) 100%);
+  background-size: 250% 100%;
+  animation: sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.value {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  /* Fixed width so the row does not jog sideways as the number grows from 9% to 100%. */
+  min-inline-size: 3.5ch;
+  text-align: right;
+}
