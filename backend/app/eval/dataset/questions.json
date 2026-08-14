@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "corpus_dir": "corpus",
+  "about": [
+    "Ground truth is expressed as verbatim MARKER PHRASES, never as chunk indices or ids.",
+    "A retrieved chunk counts as relevant iff it contains at least one of the question's markers,",
+    "compared with whitespace collapsed on both sides (the corpus is hard-wrapped; chunk text is",
+    "stored verbatim, so the normalisation is applied only to the comparison).",
+    "",
+    "This is what makes the dataset survive its own system: changing TENANTIQ_CHUNK_TARGET_TOKENS,",
+    "re-ingesting, or swapping the extractor renumbers every chunk in the corpus, and an id-based",
+    "dataset would silently start measuring nothing. A marker is also checkable by a human reading",
+    "the source document, which an id is not.",
+    "",
+    "The number of relevant chunks per question is DERIVED by scanning the ingested corpus, never",
+    "asserted here — so it cannot go stale either. A marker that matches no chunk is a hard error,",
+    "not a zero score: it means the dataset is broken, and reporting recall against an empty",
+    "denominator would quietly hide that."
+  ],
+  "questions": [
+    {
+      "id": "payment-period",
+      "question": "Under the current terms, how many days does the customer have to pay an invoice?",
+      "markers": ["within forty-five (45) days of the invoice date"],
+      "expected_document": "amendment_2_payment_terms.txt",
+      "note": "The MSA says thirty (30) days and Amendment No. 2 supersedes it. The superseded clause is a deliberate distractor sharing almost all of its vocabulary with the correct answer."
+    },
+    {
+      "id": "early-payment-discount",
+      "question": "Is there a discount for paying an invoice early?",
+      "markers": ["early payment discount of two percent (2%)"],
+      "expected_document": "amendment_2_payment_terms.txt"
+    },
+    {
+      "id": "late-payment",
+      "question": "What happens if the customer pays an invoice late?",
+      "markers": [
+        "accrue interest at one percent (1%) per month",
+        "zero point seven five percent (0.75%) per month"
+      ],
+      "expected_document": "msa_northwind_2026.txt, amendment_2_payment_terms.txt",
+      "note": "Genuinely two relevant chunks in two documents: the original rate and the rate that replaced it. Both are legitimate retrieval targets — this is one of the few questions where recall@k can exceed a single hit."
+    },
+    {
+      "id": "liability-cap",
+      "question": "What is the cap on each party's total liability under the agreement?",
+      "markers": ["total aggregate liability arising out of"],
+      "expected_document": "msa_northwind_2026.txt"
+    },
+    {
+      "id": "termination-convenience",
+      "question": "How much notice is required to terminate the agreement for convenience?",
+      "markers": ["terminate this Agreement for convenience by giving one hundred and twenty (120) days"],
+      "expected_document": "msa_northwind_2026.txt",
+      "note": "Competes with the ninety (90) day non-renewal notice in the same document and the thirty (30) day cure period beside it."
+    },
+    {
+      "id": "initial-term",
+      "question": "How long is the initial term and how does the agreement renew?",
+      "markers": ["initial term of this Agreement is twenty-four (24) months"],
+      "expected_document": "msa_northwind_2026.txt"
+    },
+    {
+      "id": "breach-notification",
+      "question": "How quickly must a personal data breach be notified?",
+      "markers": ["in any event within seventy-two (72) hours"],
+      "expected_document": "dpa_gdpr_addendum.txt",
+      "note": "The security policy's fifteen-minute alert acknowledgement and one-hour incident triage are distractors: same domain, same shape of answer, different obligation."
+    },
+    {
+      "id": "sub-processors",
+      "question": "Which sub-processors are approved, and where do they operate?",
+      "markers": ["Amazon Web Services EMEA SARL"],
+      "expected_document": "dpa_gdpr_addendum.txt"
+    },
+    {
+      "id": "sub-processor-notice",
+      "question": "How much notice is given before a new sub-processor is added?",
+      "markers": ["thirty (30) days prior written notice of any intended addition or replacement"],
+      "expected_document": "dpa_gdpr_addendum.txt"
+    },
+    {
+      "id": "sev1-response",
+      "question": "What is the initial response target for a Severity 1 support incident?",
+      "markers": ["For Severity 1 the initial response target is thirty (30) minutes"],
+      "expected_document": "support_sla.txt",
+      "note": "The security policy's fifteen-minute critical-alert acknowledgement is the distractor."
+    },
+    {
+      "id": "uptime-credit",
+      "question": "What service credit applies if monthly uptime falls below 99.5%?",
+      "markers": ["below 99.5% but at or above 99.0%, a credit of twenty-five percent (25%)"],
+      "expected_document": "support_sla.txt"
+    },
+    {
+      "id": "maintenance-window",
+      "question": "When is scheduled maintenance performed?",
+      "markers": ["announced window of Sunday 02:00 to 06:00 UK time"],
+      "expected_document": "support_sla.txt"
+    },
+    {
+      "id": "encryption-at-rest",
+      "question": "How is customer data encrypted at rest?",
+      "markers": ["encrypted at rest using AES-256"],
+      "expected_document": "information_security_policy.txt"
+    },
+    {
+      "id": "production-access",
+      "question": "How is access to production systems controlled?",
+      "markers": ["expires automatically after eight (8) hours"],
+      "expected_document": "information_security_policy.txt"
+    },
+    {
+      "id": "data-deletion",
+      "question": "How long after termination is customer data deleted?",
+      "markers": ["delete Customer Data from production systems within sixty (60) days"],
+      "expected_document": "msa_northwind_2026.txt"
+    },
+    {
+      "id": "api-rate-limits",
+      "question": "What are the default API rate limits?",
+      "markers": ["one hundred and twenty (120) read requests per minute"],
+      "expected_document": "acceptable_use_policy.txt"
+    },
+    {
+      "id": "hotel-cap-london",
+      "question": "What is the maximum I can claim for a hotel night in London?",
+      "markers": ["two hundred pounds (GBP 200) in London"],
+      "expected_document": "travel_and_expense_policy.txt"
+    },
+    {
+      "id": "home-office-allowance",
+      "question": "What can I claim towards a home office?",
+      "markers": ["one-off home office allowance of three hundred pounds (GBP 300)"],
+      "expected_document": "travel_and_expense_policy.txt"
+    }
+  ],
+  "out_of_corpus": [
+    {
+      "id": "sourdough",
+      "question": "What is the recipe for sourdough bread?"
+    },
+    {
+      "id": "capital-of-peru",
+      "question": "What is the capital of Peru?"
+    },
+    {
+      "id": "router-reset",
+      "question": "How do I reset my home wifi router to factory settings?"
+    }
+  ],
+  "out_of_corpus_about": [
+    "Questions the corpus cannot answer. They carry no markers and are excluded from precision,",
+    "recall and MRR — scoring them would be meaningless, because there is no correct chunk.",
+    "",
+    "They exist to measure something the retrieval metrics cannot: SEPARATION. Retrieval always",
+    "returns its k nearest neighbours, however far away they are, so with the default",
+    "TENANTIQ_RETRIEVAL_MIN_SIMILARITY of 0.0 the system can never refuse. The gap between the worst",
+    "in-corpus top similarity and the best out-of-corpus top similarity is the window any usable",
+    "floor has to sit in — and if that gap is negative, no single threshold can separate the two,",
+    "which is a finding worth having rather than a number worth hiding."
+  ]
+}

@@ -1,0 +1,67 @@
+SUPPORT AND SERVICE LEVEL AGREEMENT
+Northwind Technologies Ltd — Enterprise Plan
+Effective 1 February 2026
+
+1. SUPPORT HOURS AND CHANNELS
+Standard support is available 09:00 to 18:00 UK time, Monday to Friday, excluding England and Wales
+public holidays. Severity 1 incidents are supported twenty-four hours a day, seven days a week,
+including public holidays. Tickets are raised through the support portal or by email to the address
+named in the Order Form. Telephone support is available for Severity 1 incidents only, using the
+escalation number provided at onboarding.
+
+2. SEVERITY DEFINITIONS
+Severity 1 (Critical): the production service is completely unavailable, or customer data is at risk
+of loss or corruption, and no workaround exists. Severity 2 (High): a major function is unavailable
+or severely degraded for multiple users, and any workaround is impractical for normal operation.
+Severity 3 (Medium): a function is impaired for some users, or a defect exists for which a reasonable
+workaround is available. Severity 4 (Low): a cosmetic defect, a documentation error, or a general
+question with no operational impact.
+
+3. RESPONSE AND RESOLUTION TARGETS
+Initial response is measured from ticket receipt to a substantive human reply, not an automated
+acknowledgement. For Severity 1 the initial response target is thirty (30) minutes and the target for
+a resolution or a documented workaround is four (4) hours. For Severity 2 the initial response target
+is two (2) business hours and the workaround target is one (1) business day. For Severity 3 the
+initial response target is one (1) business day and the resolution target is five (5) business days.
+For Severity 4 the initial response target is two (2) business days and resolution is delivered in a
+future release at Provider's discretion.
+
+Provider shall meet the initial response target for at least ninety-five percent (95%) of tickets in
+any calendar quarter, measured per severity level and reported in the quarterly service review.
+
+4. UPTIME COMMITMENT AND SERVICE CREDITS
+Provider commits to a monthly uptime of ninety-nine point nine percent (99.9%), measured as the
+percentage of one-minute intervals in the calendar month during which the service responded
+successfully to the automated availability probe. Scheduled maintenance within an announced window,
+and downtime attributable to Customer's own systems or to a force majeure event, are excluded from
+the calculation.
+
+Where monthly uptime falls below the commitment, Customer may claim service credits against the
+following month's invoice: below 99.9% but at or above 99.5%, a credit of ten percent (10%) of the
+monthly fee; below 99.5% but at or above 99.0%, a credit of twenty-five percent (25%); below 99.0%,
+a credit of fifty percent (50%). Credits are the sole and exclusive remedy for failure to meet the
+uptime commitment. A claim must be submitted within thirty (30) days of the end of the affected month
+and must include the dates and times of the unavailability Customer observed.
+
+5. SCHEDULED MAINTENANCE
+Routine maintenance is performed within the announced window of Sunday 02:00 to 06:00 UK time.
+Provider shall give at least five (5) business days notice of maintenance expected to cause an
+interruption, and at least twenty-four (24) hours notice of emergency maintenance required to address
+a security vulnerability or an imminent stability risk. Provider targets no more than eight (8) hours
+of interrupting maintenance in any rolling twelve (12) month period.
+
+6. ESCALATION
+If a Severity 1 incident is not resolved within four (4) hours, it is escalated automatically to the
+Head of Engineering. If it is not resolved within eight (8) hours, it is escalated to the Chief
+Technology Officer, who shall provide Customer with written updates at least every two (2) hours
+until resolution. Customer may request escalation of any ticket through its named account manager.
+
+7. EXCLUSIONS
+The targets in this Agreement do not apply to: beta or preview features explicitly labelled as such;
+issues caused by Customer's modification of the service or use outside the documentation; and issues
+arising from third-party services Customer has integrated that are outside Provider's control.
+
+8. SERVICE REVIEW
+Provider and Customer shall hold a quarterly service review covering ticket volumes by severity,
+attainment against response targets, uptime attainment, incidents and their post-incident reviews,
+and the forward roadmap. The review is held remotely unless the parties agree otherwise.

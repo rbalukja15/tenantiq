@@ -18,7 +18,11 @@ lint: ## Lint backend and frontend
 	cd backend && ruff check . && black --check .
 	cd frontend && npm run lint
 
-eval: ## Run the retrieval / faithfulness evaluation suite
-	cd backend && python -m app.eval.run
+eval: ## Measure retrieval quality against the curated dataset (real embedder, in the running stack)
+	# Inside the stack on purpose: retrieval numbers are only meaningful against the real embedder,
+	# and on the host TENANTIQ_EMBEDDER_FACTORY points at an Ollama that is usually not reachable.
+	# Every report states the embedder, model and dimension that produced it, so a run that used
+	# the lexical stand-in can never be mistaken for a baseline (#21).
+	docker compose exec backend python -m app.eval.run
 
-.PHONY: help dev test lint eval
+.PHONY: help dev smoke test lint eval

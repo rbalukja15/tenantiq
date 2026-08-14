@@ -1,0 +1,68 @@
+INFORMATION SECURITY POLICY
+Northwind Technologies Ltd — Public Summary, Version 4.2
+Last reviewed: 12 January 2026
+
+1. PURPOSE AND SCOPE
+This policy describes the technical and organisational controls Northwind applies to the hosted
+platform and to the corporate systems that support it. It applies to all employees, contractors, and
+subcontractors with access to production systems or customer data. It is reviewed at least annually
+and after any material change to the platform architecture.
+
+2. ENCRYPTION
+All customer data is encrypted at rest using AES-256 with keys managed in a hardware security module
+and rotated at least every twelve (12) months. All data in transit is encrypted using TLS 1.3;
+TLS 1.2 is permitted only for legacy integrations explicitly approved by the security team, and
+TLS 1.1 and below are disabled at the load balancer. Database backups are encrypted with a separate
+key hierarchy from production data, so compromise of a production key does not expose backups.
+
+3. ACCESS CONTROL
+Access to production systems requires multi-factor authentication and is granted on a least-privilege
+basis through named individual accounts. Shared accounts are prohibited. Production access is granted
+just-in-time through an approval workflow, expires automatically after eight (8) hours, and is logged
+with the business justification recorded at the time of request. Access rights are reviewed quarterly
+and revoked within twenty-four (24) hours of a leaver's last working day.
+
+4. SECURITY INCIDENT RESPONSE
+The security team operates an on-call rota with a fifteen (15) minute acknowledgement target for
+alerts classified as critical. A suspected security incident is triaged within one (1) hour of
+detection. Where an incident is confirmed to involve customer data, the data protection team is
+engaged immediately and customer notification follows the timescales in the applicable Data
+Processing Addendum. Post-incident reviews are completed within ten (10) business days and are
+blameless; corrective actions are tracked to closure with named owners.
+
+5. VULNERABILITY MANAGEMENT
+Automated dependency scanning runs on every pull request and nightly against all deployed images.
+Critical vulnerabilities are remediated within seven (7) days of a fix being available, high severity
+within thirty (30) days, and medium within ninety (90) days. Where a fix is not available, a
+documented compensating control is put in place and reviewed monthly. An external penetration test is
+commissioned at least annually and the executive summary is available to customers under NDA.
+
+6. NETWORK AND PLATFORM SECURITY
+Production runs in private subnets with no direct inbound access from the internet except through the
+managed load balancer and a bastion protected by MFA and hardware keys. Security groups default to
+deny. Container images are built from minimal base images, scanned before promotion, and signed;
+unsigned images are rejected at deploy time by admission control.
+
+7. LOGGING AND MONITORING
+Application, infrastructure, and access logs are centralised, retained for three hundred and
+ninety-five (395) days, and protected against modification. Alerting covers authentication anomalies,
+privilege escalation, unusual data egress volume, and configuration drift. Logs containing personal
+data are subject to the same retention and deletion controls as customer data.
+
+8. TENANT ISOLATION
+The platform is multi-tenant. Every tenant-owned table carries a tenant identifier, and isolation is
+enforced in two independent layers: an application-level scoped data access layer, and database
+row-level security policies that apply even to the table owner. The application connects as a
+non-superuser role without the ability to bypass row-level security. Isolation is verified by an
+automated adversarial test suite on every change.
+
+9. PERSONNEL SECURITY
+All staff complete background screening appropriate to their role before being granted production
+access, and complete security and data protection training on joining and at least annually
+thereafter. Phishing simulations run quarterly. Staff who fail two consecutive simulations receive
+additional targeted training.
+
+10. BUSINESS CONTINUITY
+Production data is backed up continuously with point-in-time recovery for thirty-five (35) days. The
+recovery point objective is fifteen (15) minutes and the recovery time objective is four (4) hours.
+Restore procedures are exercised at least twice a year and the results are recorded.
