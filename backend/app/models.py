@@ -26,6 +26,12 @@ class User(AbstractUser):
 
     oidc_issuer = models.CharField(max_length=500, blank=True)
     oidc_sub = models.CharField(max_length=255, blank=True)
+    # What a person is *called*, kept strictly apart from what they *are* (#84). `username` is a
+    # synthesized, collision-proof identity key (see `app.auth.tenancy._synthesize_username`) and is
+    # not human-readable; this is the IdP's own label for them, refreshed from the token on each
+    # request. Nothing ever looks a user up by it: it is mutable at the IdP and not unique across
+    # issuers, which is exactly why it cannot be the key.
+    display_name = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
         constraints = [

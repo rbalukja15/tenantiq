@@ -16,13 +16,17 @@ function mockMe() {
       seen.push(auth);
       if (auth === "Bearer token-A") {
         return HttpResponse.json({
-          username: "alice",
+          // The realistic payload: `username` is the synthesized identity key, `display_name` is
+          // what a person is called. A fixture where both read "alice" cannot fail on the bug.
+          username: "abc-123.6fa97fcf2c06",
+          display_name: "alice",
           email: "alice@acme.test",
           tenant: { id: "t-1", slug: "acme", name: "Acme" },
         });
       }
       return HttpResponse.json({
-        username: "bob",
+        username: "def-456.9c1b20e4aa71",
+        display_name: "bob",
         email: "bob@globex.test",
         tenant: { id: "t-2", slug: "globex", name: "Globex" },
       });
@@ -41,6 +45,39 @@ describe("TenantHome", () => {
     expect(screen.getByRole("heading")).toHaveTextContent("Acme");
     expect(screen.getByText(/Signed in as/)).toHaveTextContent("alice");
     expect(screen.getByText("acme")).toBeInTheDocument();
+  });
+
+  it("greets the person by name, never by their identity key", async () => {
+    // The bug this pins shipped in #18 and survived until someone finally looked at the running app
+    // (#84): the shell rendered `username`, which is the synthesized `<sub>.<issuer-hash>` key, so a
+    // signed-in Alice was greeted as "c76c642e-…-8e0ad55a57f4.6fa97fcf2c06". No test could catch it
+    // while the fixture used "alice" for both fields.
+    mockMe();
+
+    render(await TenantHome({ accessToken: "token-A" }));
+
+    expect(screen.getByText(/Signed in as/)).toHaveTextContent("alice");
+    expect(screen.queryByText(/abc-123\.6fa97fcf2c06/)).toBeNull();
+  });
+
+  it("says only that you are signed in when the token carries no name", async () => {
+    // A minimal client scope sends `sub` and nothing else. "Signed in" is honest; reaching for
+    // `username` to fill the gap is how the original bug comes back.
+    server.use(
+      http.get(`${API_ORIGIN}/api/me`, () =>
+        HttpResponse.json({
+          username: "abc-123.6fa97fcf2c06",
+          display_name: "",
+          email: "",
+          tenant: { id: "t-1", slug: "acme", name: "Acme" },
+        }),
+      ),
+    );
+
+    render(await TenantHome({ accessToken: "token-A" }));
+
+    expect(screen.getByText("Signed in")).toBeInTheDocument();
+    expect(screen.queryByText(/abc-123/)).toBeNull();
   });
 
   it("renders each session's own tenant, never the previous one's", async () => {

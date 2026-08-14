@@ -1036,3 +1036,52 @@ apart. A 404 resolves rather than raising: the caller asked for it to be gone an
 be invisible in a screenshot: an indeterminate bar claiming zero percent, and a nav that marks the
 current section with `startsWith`, which makes "Ask" the current page everywhere because `/` is a
 prefix of every path in the app.
+
+## 2026-08-14 — M4 #84: the shell greeted people with their identity key
+
+Found by opening the app and looking at it. The signed-in header read:
+
+> Signed in as **c76c642e-e3c2-4d62-b241-8e0ad55a57f4.6fa97fcf2c06**
+
+It has been that way since #18. Nothing caught it, and nothing could have: every test signs its own
+token and asserts on the value it just inserted, and the fixture happened to use `alice` for the
+username — so the assertion `toHaveTextContent("alice")` passed against a field that in production
+holds a UUID and a hash. The test was green *and* the fixture was unrealistic, which is the
+combination that hides this class of bug indefinitely.
+
+The obvious fix is wrong, and that is the interesting part. `app/auth/tenancy.py` synthesizes the
+username deliberately:
+
+```python
+return f"{sub}.{issuer_hash}"[:150]
+```
+
+That is not sloppiness — it is what stops two Keycloak realms sharing a host from colliding on
+`django.contrib.auth`'s unique `username`. Reaching for `preferred_username` instead would trade a
+cosmetic bug for a real one: it is **mutable** (a user can rename themselves in Keycloak) and **not
+unique across realms**, so a stable identity key would become something two tenants can collide on
+and a user can change from outside the system. A test now pins that directly — two realms, both
+calling someone `alice`, must still be two users with two distinct keys.
+
+So the fix adds a field rather than changing one. `User.display_name` holds the IdP's own label,
+resolved `preferred_username` → `name` → `email`, and `/api/me` returns it alongside `username`.
+Nothing ever looks a user up by it.
+
+Three details that are each a test:
+
+- **Empty is a valid answer.** A token is only required to carry `sub` and `iss`, so a minimal client
+  scope sends no name at all. The UI renders "Signed in" with no name rather than inventing one —
+  and specifically rather than falling back to `username`, which is the bug returning by the back
+  door. The mutation "a nameless token falls back to the identity key" is what pins it.
+- **A rename at the IdP has to reach the UI**, so the stored label is refreshed from every token —
+  but only *written* when it actually changed, so the common request stays a read.
+- **A later token that omits the claim must not erase a known name.** Client scopes differ per flow,
+  and blanking the greeting mid-session because one token was leaner is worse than a stale label.
+
+The migration backfills to `""`, not to `username`: the existing values *are* the synthesized keys,
+so copying them across would seed the exact string the field exists to stop showing anyone. Rows
+fill in on their owner's next authenticated request.
+
+304 backend tests, 387 frontend. Eight mutations, all caught. Verified in the browser against the
+running stack — the same place the bug was found, because that is the only place it was ever
+visible.

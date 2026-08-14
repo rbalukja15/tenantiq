@@ -49,6 +49,13 @@ class MeView(APIView):
     """Who am I + which tenant. The frontend's session probe and the auth test surface.
 
     Deliberately does not expose tenant OIDC config (e.g. client id).
+
+    ``username`` and ``display_name`` are two different things and the distinction is load-bearing
+    (#84). ``username`` is the synthesized ``<sub>.<issuer-hash>`` identity key — unique, stable, and
+    unreadable. ``display_name`` is the IdP's own label for the person, and is the *only* one a
+    person should ever be shown; rendering the key is how the shell came to greet Alice as
+    ``c76c642e-…-8e0ad55a57f4.6fa97fcf2c06``. It may be empty when the token carries no name claim,
+    which the caller renders as no name rather than inventing one.
     """
 
     permission_classes = [IsAuthenticated]
@@ -59,6 +66,7 @@ class MeView(APIView):
         return Response(
             {
                 "username": request.user.username,
+                "display_name": request.user.display_name,
                 "email": request.user.email,
                 "tenant": {"id": str(tenant.id), "slug": tenant.slug, "name": tenant.name},
             }
