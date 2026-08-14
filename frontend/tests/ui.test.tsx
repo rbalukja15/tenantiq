@@ -9,9 +9,11 @@ import { DataTable } from "@/app/components/ui/DataTable";
 import { EmptyState } from "@/app/components/ui/EmptyState";
 import { Loading } from "@/app/components/ui/Loading";
 import { NoEvidence } from "@/app/components/ui/NoEvidence";
+import { ProgressBar } from "@/app/components/ui/ProgressBar";
 import { SourceCard, type Source } from "@/app/components/ui/SourceCard";
 import { StatusPill } from "@/app/components/ui/StatusPill";
 import { TextField } from "@/app/components/ui/TextField";
+import type { DocumentStatus } from "@/lib/documents";
 
 /**
  * These assert **semantics**, never appearance.
@@ -109,6 +111,34 @@ describe("StatusPill", () => {
     render(<StatusPill status={status} />);
 
     expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it("shows a status it has never heard of rather than rendering an empty pill", () => {
+    // The type says this cannot happen; the network says otherwise. A status the backend grows after
+    // this build ships would otherwise index the label map with `undefined` and leave a blank cell
+    // where a state should be.
+    render(<StatusPill status={"archived" as DocumentStatus} />);
+
+    expect(screen.getByText("archived")).toBeInTheDocument();
+  });
+});
+
+describe("ProgressBar", () => {
+  it("reports how far along it is, in the accessibility tree and in words", () => {
+    render(<ProgressBar label="Uploading msa.pdf" fraction={0.42} />);
+
+    expect(screen.getByRole("progressbar", { name: "Uploading msa.pdf" })).toHaveValue(42);
+    // A bar carries its meaning in colour and length alone, which is not enough on its own.
+    expect(screen.getByText("42%")).toBeInTheDocument();
+  });
+
+  it("is indeterminate rather than zero when there is no total to measure against", () => {
+    // `value={0}` announces "0 percent", which is a claim. A `<progress>` with no value at all is
+    // the platform's own "we cannot say", which assistive technology already knows how to report.
+    render(<ProgressBar label="Uploading" fraction={null} />);
+
+    expect(screen.getByRole("progressbar")).not.toHaveAttribute("value");
+    expect(screen.queryByText("0%")).toBeNull();
   });
 });
 

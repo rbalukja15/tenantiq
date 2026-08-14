@@ -963,3 +963,76 @@ One more gap surfaced alongside it, recorded on the issue rather than fixed here
 `docker-compose.yml`'s `x-backend-env` forwards four `TENANTIQ_*` variables while `.env.example`
 documents nine, so setting the retrieval floor, the throttles, the quotas or the chunking tunables in
 `.env` does nothing at all under `make dev` — silently.
+
+## 2026-08-14 — M4 #20: document management UI (ADR-0017)
+
+The loop closes. #19 could ask questions about a corpus; this is how the corpus gets there — upload
+with progress, a list showing where each document is in ingestion, and delete. It completes M4, and
+it is the first screen in the project whose whole job is a *state machine someone else is driving*.
+
+Three things decided the shape of it, and none of them were UI preferences.
+
+**`fetch` cannot report upload progress.** Its request body is consumed opaquely, and the streaming
+request form that would expose it is not available for this in any shipping browser. So the upload —
+and only the upload — goes over `XMLHttpRequest`, whose `upload` object has emitted byte-accurate
+progress events for fifteen years. Every other call in the frontend stays a `fetch`. That is the kind
+of asymmetry that reads as legacy in six months unless the reason is written next to it.
+
+**One bar would have had to invent two thirds of itself.** Uploading, saving and ingesting are three
+different waits with three different lengths, and the honest thing is three indicators: a determinate
+bar for bytes leaving the browser, an indeterminate "Saving…" from the last byte until the row is
+committed, and the row's own status pill for the worker's part. A single bar spanning all three has
+to make up the second and third stretches — and its degenerate form, parked at 100% while the server
+writes a 25 MB file, is the most common way an upload UI reads as hung.
+
+**Ingestion is asynchronous and the browser did not start it**, so the list polls. The loop is
+self-limiting in both directions: it runs only while something is PENDING or PROCESSING and stops
+dead when everything is terminal, so an idle tab makes no requests at all; and it gives up after
+three consecutive failures, so a backend that is down is asked a handful of times rather than
+forever. Each poll is scheduled from the *completed* request — `setInterval` fires whether or not the
+previous response came back, which turns a slow API into a pile-up.
+
+The polling loop also produced the one real bug in this issue, and it was mine. The retry decision
+originally read `documents` — component state — from inside the effect. The effect deliberately does
+not depend on `documents` (that would start a fresh chain on every poll), so the closure captured
+`null` on the first pass and kept it forever: the retry branch could never fire. A local `let moving`
+updated by each successful poll is the fix, and the mutation "a dead backend is polled forever" is
+what pins it.
+
+**Two things this harness cannot prove, and what was done instead.** Measured, not assumed:
+
+- the fake server emits every upload event *after* the handler has already responded — `loadstart`,
+  `progress` and `load` all landed one millisecond before the response — so a partial upload cannot
+  exist there, and neither can the "Saving…" window that matters most;
+- jsdom reduces a `File` inside an `XMLHttpRequest` `FormData` to a nine-byte placeholder named
+  `blob`, so a test asserting the filename through the network would pass while nothing was sent.
+
+Both are handled the way `lib/upstream.ts` already handles the equivalent problem for header policy:
+assert the decision where it is made. The multipart body is proven against `buildUploadForm`
+directly, and the progress states get one deliberately module-mocked file that supplies the events
+the transport would have produced. Stated in the ADR and in both test files, because a coverage gap
+that is written down is a known limitation and one that is not is a lie by omission.
+
+A smaller jsdom trap cost a while: a `required` file input reports `valueMissing` even with
+`files.length === 1`, because `userEvent.upload` sets the file list through a property override the
+validity check does not see. The form therefore never submitted and every happy-path test failed.
+`required` was removed rather than worked around — the submit button is disabled until a file is
+chosen and the handler returns early without one, so the native constraint was unreachable anyway,
+and keeping a dead validation at the cost of all the real coverage is a bad trade.
+
+No client-side type or size check. The picker's `accept` list is a hint and cannot refuse anything —
+a user can switch the dialog to "All Files" — so it can only ever go stale, never veto a file the
+server would have taken. A real client-side gate would be a second, drifting copy of a rule the
+server already owns; the message shown on a rejection is DRF's own sentence, pulled from its field
+errors rather than reconstructed here. The accepted cost is that an oversized file is discovered
+after it has been uploaded.
+
+Delete asks first, in the row, and says that the passages go with the document — the consequence a
+user cannot see from a filename. Per-document accessible names (`Delete MSA.pdf`, `Confirm deleting
+MSA.pdf`) rather than a column of identical "Delete" buttons nobody listening to the page could tell
+apart. A 404 resolves rather than raising: the caller asked for it to be gone and it is gone.
+
+385 frontend tests, up from 303. Fifteen mutations, every one caught — including the two that would
+be invisible in a screenshot: an indeterminate bar claiming zero percent, and a nav that marks the
+current section with `startsWith`, which makes "Ask" the current page everywhere because `/` is a
+prefix of every path in the app.

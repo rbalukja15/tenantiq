@@ -11,18 +11,18 @@
 
 ## The problem
 
-Teams sit on large private document sets (contracts, manuals, reports) and can't search them in natural language. Generic chatbots hallucinate and have no notion of *whose* data they're answering from. TenantIQ is a production-shaped answer: strict per-tenant isolation, grounded retrieval, cited answers, and a measured quality bar.
+Teams sit on large private document sets (contracts, manuals, reports) and can't search them in natural language. Generic chatbots hallucinate and have no notion of _whose_ data they're answering from. TenantIQ is a production-shaped answer: strict per-tenant isolation, grounded retrieval, cited answers, and a measured quality bar.
 
 ## Why it's worth a look
 
 A production-shaped RAG system built in the open — one reviewed PR per issue, an ADR for every real decision, and a day-by-day [**dev log**](docs/devlog.md).
 
-- **Tenant isolation is proven, not promised.** Each tenant's data is walled off by **two independent layers** — a scoped ORM manager *and* forced Postgres row-level security. An [adversarial test suite](backend/tests/test_tenant_isolation.py) shows the database still blocks a cross-tenant read *with the application filter deliberately removed*. Design: [`docs/tenant-isolation.md`](docs/tenant-isolation.md).
-- **Grounding is a hard contract, by design.** The rule the M3 query engine is being built to enforce (in progress): the LLM never computes numbers and never invents citations — answers stay grounded in retrieved tenant-scoped chunks, and every citation resolves to a real chunk ID. The faithful, offset-addressable chunks it will cite already ship.
-- **Engineered like a product.** Async ingestion (parse → chunk → embed) with retries and observability, and a one-command Docker stack (`make dev`) that brings up the whole system.
-- **Decisions are written down.** Six [Architecture Decision Records](docs/adr) explain the *why* behind the stack, isolation model, chunking, embeddings, and deployment.
+- **Tenant isolation is proven, not promised.** Each tenant's data is walled off by **two independent layers** — a scoped ORM manager _and_ forced Postgres row-level security. An [adversarial test suite](backend/tests/test_tenant_isolation.py) shows the database still blocks a cross-tenant read _with the application filter deliberately removed_. Design: [`docs/tenant-isolation.md`](docs/tenant-isolation.md).
+- **Grounding is a hard contract, enforced end to end.** The LLM never computes numbers and never invents citations — answers stay grounded in retrieved tenant-scoped chunks, every citation resolves to a real chunk ID, and the UI will only make a `[1]` clickable once it has fetched the passage behind it. When nothing relevant is retrieved, the product refuses and says so rather than answering thinly.
+- **Engineered like a product.** Async ingestion (parse → chunk → embed) with retries and observability, a browser UI that streams an answer beside the passages it cites and manages the corpus that feeds it, and a one-command Docker stack (`make dev`) that brings up the whole system.
+- **Decisions are written down.** Seventeen [Architecture Decision Records](docs/adr) explain the _why_ behind the stack, isolation model, chunking, embeddings, streaming, the frontend, and deployment.
 
-**Status:** M0–M3 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers); M4 (frontend) in progress. See the [Roadmap](#roadmap).
+**Status:** M0–M4 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers, and the frontend that uses them); M5 (evaluation harness) next. See the [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -43,14 +43,14 @@ See [`docs/architecture.md`](docs/architecture.md) for the full breakdown and [`
 
 ## Tech stack & why
 
-| Layer | Choice | Why |
-|------|--------|-----|
-| Backend | Django REST | Mature, batteries-included, strong ORM for tenant scoping |
-| Frontend | Next.js + TypeScript | App Router, streaming UI, type safety |
-| Vectors | Postgres + pgvector | One datastore; isolation and vectors in the same tenant-scoped rows |
-| Async | Celery + Redis | Decouple slow ingestion from requests |
-| Auth | Keycloak (OIDC) | Per-tenant identity providers; tenant resolved only from the verified token |
-| LLM | Anthropic API (Ollama fallback) | Quality with a local/cost option |
+| Layer    | Choice                          | Why                                                                         |
+| -------- | ------------------------------- | --------------------------------------------------------------------------- |
+| Backend  | Django REST                     | Mature, batteries-included, strong ORM for tenant scoping                   |
+| Frontend | Next.js + TypeScript            | App Router, streaming UI, type safety                                       |
+| Vectors  | Postgres + pgvector             | One datastore; isolation and vectors in the same tenant-scoped rows         |
+| Async    | Celery + Redis                  | Decouple slow ingestion from requests                                       |
+| Auth     | Keycloak (OIDC)                 | Per-tenant identity providers; tenant resolved only from the verified token |
+| LLM      | Anthropic API (Ollama fallback) | Quality with a local/cost option                                            |
 
 ## Run locally
 
@@ -72,7 +72,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - **M1** ✅ Auth & multi-tenancy — two-layer tenant isolation, proven by tests
 - **M2** ✅ Document ingestion pipeline — parse, chunk, embed, with retries & observability
 - **M3** ✅ RAG query engine — retrieval hardening, grounded generation, SSE streaming, guardrails, per-tenant limits & cost accounting
-- **M4** 🚧 Frontend & streaming UX — app shell + OIDC via a BFF, design system, and the streaming ask screen with clickable citations
+- **M4** ✅ Frontend & streaming UX — app shell + OIDC via a BFF, design system, the streaming ask screen with clickable citations, and document management (upload with progress, live ingestion status, delete)
 - **M5** ⬜ Evaluation harness (`make eval`)
 - **M6** 🚧 Deployment & CI/CD — one-command Docker Compose stack landed
 - **M7** ⬜ Observability & cost dashboard
@@ -86,6 +86,17 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0004 — Embeddings & vector store](docs/adr/0004-embeddings-and-vector-store.md)
 - [ADR-0005 — Ingestion observability & retry model](docs/adr/0005-ingestion-observability.md)
 - [ADR-0006 — Local dev containerization](docs/adr/0006-local-dev-containerization.md)
+- [ADR-0007 — Grounded prompt assembly](docs/adr/0007-grounded-prompt-assembly.md)
+- [ADR-0008 — Grounded generation & the citation contract](docs/adr/0008-grounded-generation.md)
+- [ADR-0009 — Query streaming](docs/adr/0009-query-streaming.md)
+- [ADR-0010 — PII redaction & injection guardrails](docs/adr/0010-pii-redaction-and-injection-guardrails.md)
+- [ADR-0011 — Per-tenant rate limiting & quotas](docs/adr/0011-per-tenant-rate-limiting-and-quotas.md)
+- [ADR-0012 — Per-tenant cost & token accounting](docs/adr/0012-per-tenant-cost-and-token-accounting.md)
+- [ADR-0013 — Frontend foundations (the BFF)](docs/adr/0013-frontend-foundations.md)
+- [ADR-0014 — Frontend design system](docs/adr/0014-frontend-design-system.md)
+- [ADR-0015 — Document deletion & citation resolution](docs/adr/0015-document-deletion-and-citation-resolution.md)
+- [ADR-0016 — Rendering a streamed, cited answer](docs/adr/0016-rendering-a-streamed-cited-answer.md)
+- [ADR-0017 — Managing a corpus from the browser](docs/adr/0017-document-management-ui.md)
 
 ## License
 

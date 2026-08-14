@@ -1,0 +1,81 @@
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: var(--border) solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+/*
+ * A file input, not a text one, so it does not reuse TextField: the control here is the browser's
+ * own "Choose file" button plus a filename, and TextField's padding and strong border draw a box
+ * around a button that already has one. The strong rule still applies to the outer control, and the
+ * ::file-selector-button is styled to match `Button.quiet` so the two do not read as different
+ * design systems side by side.
+ */
+.input {
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  max-width: 100%;
+}
+
+.input::file-selector-button {
+  font: inherit;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-4);
+  margin-right: var(--space-3);
+  background: var(--surface);
+  color: var(--ink);
+  border: var(--border) solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.input:disabled::file-selector-button {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.input:not(:disabled)::file-selector-button:hover {
+  background: var(--sunken);
+}
+
+.hint {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  max-width: var(--measure);
+}
+
+/* Progress and errors take the whole row rather than squeezing in beside the button, so the form
+   does not reflow sideways every time one appears. Empty until there is something to say. */
+.status {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.status:empty {
+  display: none;
+}

@@ -83,6 +83,7 @@ exist, add it to `global.css` rather than reaching for a hex value.
 | Path                    | Role                                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------------------- |
 | `proxy.ts`              | Route gating: no session cookie → `/login`. (Next 16's replacement for `middleware.ts`.)    |
+| `app/(app)/`            | The signed-in surfaces: `/` is the ask screen, `/documents` manages the corpus.             |
 | `app/api/auth/*`        | Login, callback, logout — the OIDC flow.                                                    |
 | `app/api/[...path]`     | The API proxy: path hygiene, session, CSRF, token refresh, header allowlists, streaming.    |
 | `lib/`                  | `config`, `session`, `csrf`, `oidc`, `upstream` — all plain functions, all directly tested. |
@@ -118,3 +119,31 @@ Two rules in `lib/answer.ts` and `lib/query.ts` are load-bearing rather than sty
 
 When testing anything here, split the mock stream across chunk boundaries on purpose — a single-chunk
 response exercises none of the parsing that actually breaks in production.
+
+## Managing the corpus
+
+`/documents` uploads, lists and deletes (ADR-0017). Two things about it are easy to "clean up" into
+bugs:
+
+- **The upload is an `XMLHttpRequest`, and everything else is a `fetch`.** Not legacy: `fetch` cannot
+  report upload progress at all. The transport is confined to `uploadDocument` in `lib/documents.ts`.
+- **Upload progress and ingestion progress are different things and never share an indicator.** The
+  bar counts bytes reaching _this app's server_; "Saving…" covers the wait for the row to commit; the
+  status pill covers the worker. One bar spanning all three would have to invent two of them.
+
+The list **polls** while any document is `PENDING` or `PROCESSING`, and stops when none is — an idle
+tab makes no requests. It also gives up after three consecutive failures. Each poll is scheduled from
+the completed request; `setInterval` here would pile up requests against a slow API.
+
+Two limits of the test harness, both measured rather than assumed, and both worked around by
+asserting where the decision is made rather than through the network:
+
+- jsdom reduces a `File` inside an `XMLHttpRequest` `FormData` to a nine-byte placeholder named
+  `blob`, so the multipart body is asserted against `buildUploadForm` directly;
+- MSW emits every upload event _after_ the response, so a partial upload cannot happen there —
+  `tests/document-upload-progress.test.tsx` is the one file in the suite that mocks a module, and it
+  exists solely to drive those states.
+
+One more jsdom trap worth knowing before adding a field here: a `required` **file** input reports
+`valueMissing` even when a file is attached, which blocks form submission and makes every happy-path
+test fail for a reason that has nothing to do with your change.
