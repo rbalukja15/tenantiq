@@ -5,9 +5,17 @@ import { apiBaseUrl } from "@/lib/config";
 
 import styles from "./TenantHome.module.css";
 
-/** The subset of `GET /api/me` this view needs (see the backend's `MeView`). */
+/**
+ * The subset of `GET /api/me` this view needs (see the backend's `MeView`).
+ *
+ * `display_name` is the only field here a person is ever shown. `username` is deliberately **not**
+ * rendered: it is the synthesized `<sub>.<issuer-hash>` identity key, and printing it is how the
+ * shell came to greet Alice as `c76c642e-…-8e0ad55a57f4.6fa97fcf2c06` (#84). It stays in the type
+ * because the endpoint returns it and mislabelling the payload would just move the confusion.
+ */
 type Me = {
   username: string;
+  display_name: string;
   email: string;
   tenant: { id: string; slug: string; name: string };
 };
@@ -43,8 +51,18 @@ export async function TenantHome({ accessToken }: { accessToken: string }) {
   return (
     <section className={styles.wrap}>
       <h1 className={styles.tenant}>{me.tenant.name}</h1>
+      {/* No name claim in the token is a real case — a minimal client scope sends only `sub` — and
+          "Signed in" without one is the honest rendering. Falling back to `username` here is
+          precisely the bug (#84); falling back to the email would put an address on screen that the
+          IdP never offered as a name. */}
       <p className={styles.identity}>
-        Signed in as <strong>{me.username}</strong>
+        {me.display_name ? (
+          <>
+            Signed in as <strong>{me.display_name}</strong>
+          </>
+        ) : (
+          "Signed in"
+        )}
       </p>
       <p className={styles.scope}>
         <span className={styles.slug}>{me.tenant.slug}</span>

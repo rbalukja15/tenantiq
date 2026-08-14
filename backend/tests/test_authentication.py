@@ -110,3 +110,99 @@ def test_same_sub_two_issuers_are_distinct_users(api, tenant_acme, mint_token):
 def test_me_does_not_leak_client_id(api, tenant_acme, mint_token):
     resp = api.get("/api/me", **bearer(mint_token()))
     assert TEST_CLIENT_ID not in resp.content.decode()
+
+
+# --- display name vs identity key (#84) --------------------------------------------------------
+#
+# The shell greeted a signed-in Alice as "c76c642e-…-8e0ad55a57f4.6fa97fcf2c06". The synthesized
+# username is *correct* — it is what stops two realms sharing a host from colliding on Django's
+# unique `username` — but it is an identity key, and it had leaked into the interface. These pin
+# both halves: a person gets a readable name, and that name never becomes the key.
+
+
+def test_me_reports_the_name_the_idp_uses_for_the_person(api, tenant_acme, mint_token):
+    resp = api.get("/api/me", **bearer(mint_token(sub="abc-123", preferred_username="alice")))
+
+    assert resp.json()["display_name"] == "alice"
+
+
+def test_the_display_name_is_never_the_identity_key(api, tenant_acme, mint_token):
+    # The bug, stated directly: whatever else is true, the thing rendered to a person must not be
+    # the synthesized <sub>.<issuer-hash>.
+    resp = api.get("/api/me", **bearer(mint_token(sub="abc-123", preferred_username="alice")))
+    body = resp.json()
+
+    assert body["username"].startswith("abc-123.")  # the key is unchanged...
+    assert body["display_name"] != body["username"]  # ...and is not what gets shown
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected"),
+    [
+        ({"preferred_username": "alice", "name": "Alice A", "email": "a@acme.test"}, "alice"),
+        ({"name": "Alice Anderson", "email": "a@acme.test"}, "Alice Anderson"),
+        ({"email": "alice@acme.test"}, "alice@acme.test"),
+        ({}, ""),
+        # Whitespace is not a name. A claim of "   " must fall through rather than render a blank.
+        ({"preferred_username": "   ", "name": "Alice Anderson"}, "Alice Anderson"),
+    ],
+)
+def test_display_name_falls_back_through_the_claims(api, tenant_acme, mint_token, claims, expected):
+    resp = api.get("/api/me", **bearer(mint_token(sub="who", **claims)))
+
+    assert resp.json()["display_name"] == expected
+
+
+def test_a_token_with_no_name_claim_does_not_invent_one(api, tenant_acme, mint_token):
+    # Empty is the honest answer, and the caller renders "signed in" without a name. Falling back to
+    # `username` here is exactly how the original bug would come back.
+    resp = api.get("/api/me", **bearer(mint_token(sub="nameless")))
+    body = resp.json()
+
+    assert body["display_name"] == ""
+    assert body["username"] not in ("", None)
+
+
+def test_renaming_at_the_idp_updates_the_name_but_not_the_identity(api, tenant_acme, mint_token):
+    # preferred_username is mutable at the IdP — which is why it must never be the lookup key.
+    api.get("/api/me", **bearer(mint_token(sub="stable", preferred_username="alice")))
+    user_id = User.objects.get(oidc_sub="stable").id
+
+    resp = api.get("/api/me", **bearer(mint_token(sub="stable", preferred_username="alice.smith")))
+
+    assert resp.json()["display_name"] == "alice.smith"
+    assert User.objects.filter(oidc_sub="stable").count() == 1
+    assert User.objects.get(oidc_sub="stable").id == user_id  # same row, renamed
+
+
+def test_a_later_token_without_the_claim_does_not_erase_a_known_name(api, tenant_acme, mint_token):
+    # Client scopes differ per flow, so a refreshed or differently-scoped token can legitimately
+    # omit the claim. Blanking the name on that would make the greeting flicker away mid-session.
+    api.get("/api/me", **bearer(mint_token(sub="stable", preferred_username="alice")))
+
+    resp = api.get("/api/me", **bearer(mint_token(sub="stable")))
+
+    assert resp.json()["display_name"] == "alice"
+
+
+def test_two_people_may_share_a_display_name_across_issuers(api, tenant_acme, mint_token):
+    # The reason the key is synthesized in the first place. Two realms can both call someone
+    # "alice"; they are still two users, and neither login may reach the other's row.
+    Tenant.objects.create(
+        slug="globex", name="Globex", oidc_issuer=GLOBEX_ISSUER, oidc_client_id=GLOBEX_CLIENT
+    )
+    api.get("/api/me", **bearer(mint_token(sub="alice", preferred_username="alice")))
+    api.get(
+        "/api/me",
+        **bearer(
+            mint_token(
+                sub="alice",
+                issuer=GLOBEX_ISSUER,
+                audience=GLOBEX_CLIENT,
+                preferred_username="alice",
+            )
+        ),
+    )
+
+    assert User.objects.filter(display_name="alice").count() == 2
+    assert User.objects.values("username").distinct().count() == 2
