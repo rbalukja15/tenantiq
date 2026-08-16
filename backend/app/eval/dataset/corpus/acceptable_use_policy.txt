@@ -1,0 +1,65 @@
+ACCEPTABLE USE POLICY
+Northwind Technologies Ltd — Platform Terms
+Effective 1 February 2026
+
+1. PURPOSE
+This policy sets out what customers and their authorised users may and may not do with the Northwind
+platform. It supplements the Master Services Agreement and applies to every account, environment, and
+API credential issued to a customer. Breach of this policy may lead to suspension under the
+suspension provisions of the Agreement.
+
+2. AUTHORISED USERS
+Access credentials are issued to named individuals and must not be shared. Customer is responsible for
+the acts and omissions of its authorised users as if they were Customer's own. Customer shall revoke
+access promptly when an authorised user leaves or changes role, and in any event within five (5)
+business days. Service accounts used for API integrations must be clearly labelled, owned by a named
+individual, and reviewed at least every six (6) months.
+
+3. PROHIBITED CONTENT
+Customer shall not upload content that it does not have the right to process, that infringes a third
+party's intellectual property, or that contains malicious code. Customer shall not upload special
+categories of personal data, payment card data subject to PCI DSS, or classified government material,
+unless the parties have agreed additional controls in writing and recorded them in an Order Form.
+
+4. PROHIBITED CONDUCT
+Customer shall not: attempt to gain unauthorised access to any part of the platform or to another
+tenant's data; probe, scan, or test the vulnerability of the platform without Provider's prior written
+consent; interfere with or disrupt the integrity or performance of the platform; reverse engineer or
+attempt to derive the source code of the platform except to the extent that restriction is prohibited
+by law; or use the platform to build a competing service.
+
+5. RATE LIMITS AND FAIR USE
+API usage is subject to per-tenant rate limits published in the developer documentation. The default
+limits are one hundred and twenty (120) read requests per minute, twenty (20) document uploads per
+minute, and thirty (30) question requests per minute. Sustained usage beyond a plan's fair use
+allowance may be throttled after notice. Customer shall not attempt to circumvent rate limits by
+distributing requests across multiple accounts or credentials.
+
+6. AUTOMATED AND HIGH-VOLUME USE
+Bulk ingestion of more than ten thousand (10,000) documents in any twenty-four (24) hour period
+requires prior notice to Provider so that capacity can be arranged. Provider will not unreasonably
+withhold agreement, and may propose a scheduled window. Automated question generation for the purpose
+of benchmarking or model training is not permitted without written agreement.
+
+7. SECURITY RESEARCH
+Provider welcomes good-faith security research conducted under its published responsible disclosure
+policy. Researchers must not access, modify, or exfiltrate data belonging to any party other than
+themselves, must not degrade the service, and must report findings to the security contact before any
+public disclosure. Provider will not pursue action against research that follows that policy.
+
+8. REPORTING MISUSE
+Suspected misuse should be reported to the abuse contact published in the developer documentation.
+Provider will acknowledge a report within one (1) business day and will keep the reporter informed of
+progress where it is lawful and appropriate to do so.
+
+9. ENFORCEMENT
+Provider will normally give notice and an opportunity to remedy before taking action. Where conduct
+presents an immediate risk to the platform, to other customers, or to data, Provider may suspend the
+affected credentials or environment immediately and give notice as soon as practicable afterwards.
+Suspension under this policy does not relieve Customer of its obligation to pay fees for the period of
+suspension, unless the suspension is later found to have been made in error.
+
+10. CHANGES
+Provider may update this policy on thirty (30) days notice. Where a change materially reduces
+Customer's rights, Customer may terminate the affected services without penalty by giving notice
+before the change takes effect.

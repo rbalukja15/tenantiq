@@ -1085,3 +1085,72 @@ fill in on their owner's next authenticated request.
 304 backend tests, 387 frontend. Eight mutations, all caught. Verified in the browser against the
 running stack — the same place the bug was found, because that is the only place it was ever
 visible.
+
+## 2026-08-14 — M5 #21: retrieval, measured (`make eval`)
+
+The README has called measurement the differentiator since M0. This is the first commit where that
+is true: `make eval` now ingests a curated corpus through the real pipeline, runs eighteen questions
+through the real retrieval path, and prints precision@k, recall@k, hit@k and MRR — stamped with the
+embedder that produced them.
+
+**Ground truth is a phrase, not a chunk id.** Each question names verbatim marker phrases, and a
+retrieved chunk is relevant if it contains one. Chunk ids are an artefact of the current chunking
+configuration: change `TENANTIQ_CHUNK_TARGET_TOKENS`, re-ingest, or swap the extractor, and every id
+moves. An id-keyed dataset would go on producing numbers and quietly stop measuring anything. A
+phrase is also checkable by a human reading the source document, which an id is not. For the same
+reason the *number* of relevant chunks per question is derived by scanning the ingested corpus at
+run time rather than asserted in the file.
+
+**The first real numbers**, against `nomic-embed-text` on 7 documents / 14 chunks:
+
+```
+            @1       @3       @5
+hit       0.56     1.00     1.00
+precision 0.56     0.35     0.22
+recall    0.50     0.94     0.97
+MRR 0.75
+```
+
+The shape is the finding. The right passage is *always* in the top 3, but it is the single best
+match only a little over half the time — so the model is often handed the correct chunk as source
+[2] or [3] with near-misses above it. That is an argument for keeping k at 5, and a concrete target
+for a reranker.
+
+**The separation measurement is the part I would keep if I could keep one thing.** Retrieval always
+returns its k nearest neighbours however far away they are, so `TENANTIQ_RETRIEVAL_MIN_SIMILARITY` is
+the only thing that lets the product refuse. Three deliberately unanswerable questions measure the
+gap: the worst answerable question scores 0.558, the best unanswerable one 0.403. Any floor in
+between separates them perfectly. **The shipped default is 0.0**, which refuses nothing — so the
+refusal state #74 designed and #19 built is unreachable in a default deployment. That is a real
+finding about the product, produced by the eval on its first run, and it is exactly what the review
+note on #21 meant by "otherwise tuned blind".
+
+**Two bugs found, and one of them is the interesting kind.**
+
+The first was mine and shallow: the report called the *configured* similarity floor "the default"
+and then asserted it "refuses nothing" — which was false the moment a run had a floor set. Replaced
+with three explicit cases (too low / too high / inside the window), each with a test.
+
+The second is worth writing down. Cleanup deleted the scratch tenant and let the cascade take its
+documents. `Tenant` is not tenant-owned, so that delete runs with no `app.current_tenant` set — and
+the RLS policy on `app_document` then matches zero rows, cascades nothing, and the foreign key
+raises. Layer 2 doing precisely its job. Every test passed anyway, because pytest wraps each test in
+one transaction and the `SET LOCAL` GUC from the last `tenant_context` was *still active* when the
+tenant was deleted. The isolation layer was being satisfied by a test-harness artefact. The fix is to
+delete the tenant-owned rows inside the tenant context; the test that pins it uses
+`django_db(transaction=True)` for real commits, and it fails with an `IntegrityError` when the fix is
+reverted — verified, because a regression test nobody has seen fail is a decoration.
+
+**What the harness refuses to do** matters as much as what it computes. A marker that matches no
+*ingested* chunk aborts the run rather than scoring zero — PII redaction rewriting a phrase
+mid-pipeline would otherwise look exactly like a retrieval failure, and there is a test that ingests
+an email address to prove it. A corpus that does not ingest cleanly aborts too. And a run against the
+lexical stand-in embedder prints a banner saying the numbers are not retrieval quality, because
+numbers from it look exactly like real ones in a table.
+
+Limitations are in `docs/evaluation.md` rather than implied: 14 chunks against k=5 means hit@3 and
+hit@5 saturate at 1.00 and cannot discriminate; relevance is binary; one embedder, one language; and
+faithfulness is #22's job, not measured here. Growing the dataset is a data change — drop a `.txt`
+in and add questions — which is the property that makes the caveat temporary.
+
+345 backend tests, up from 304.

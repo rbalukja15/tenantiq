@@ -1,0 +1,74 @@
+MASTER SERVICES AGREEMENT
+Between Northwind Technologies Ltd ("Provider") and Acme Industrial Group ("Customer")
+Effective 1 February 2026
+
+1. SCOPE OF SERVICES
+Provider shall supply the hosted document intelligence platform, professional services, and support
+described in each Order Form executed under this Agreement. Each Order Form incorporates these terms
+by reference. Where an Order Form conflicts with this Agreement, the Order Form governs, but only for
+the services described in that Order Form and only where the conflict is explicit.
+
+2. TERM AND RENEWAL
+The initial term of this Agreement is twenty-four (24) months from the Effective Date. Thereafter the
+Agreement renews automatically for successive twelve (12) month periods unless either party gives
+written notice of non-renewal at least ninety (90) days before the end of the then-current term.
+Renewal pricing shall not increase by more than five percent (5%) over the immediately preceding
+term unless the parties agree otherwise in writing.
+
+3. FEES AND PAYMENT
+Fees are stated in each Order Form and are exclusive of value added tax and other applicable taxes.
+Provider shall invoice Customer monthly in arrears. Customer shall pay each undisputed invoice within
+thirty (30) days of the invoice date. Amounts properly disputed in good faith are not due until the
+dispute is resolved, provided Customer notifies Provider of the dispute in writing within fifteen (15)
+days of receiving the invoice and pays the undisputed portion when due. Overdue undisputed amounts
+accrue interest at one percent (1%) per month or the maximum rate permitted by law, whichever is lower.
+
+4. TERMINATION
+Either party may terminate this Agreement for convenience by giving one hundred and twenty (120) days
+prior written notice. Either party may terminate for cause if the other party commits a material
+breach and fails to cure that breach within thirty (30) days of written notice describing it in
+reasonable detail. Provider may suspend the services on ten (10) business days notice if Customer
+fails to pay undisputed amounts that are more than sixty (60) days overdue.
+
+5. LIMITATION OF LIABILITY
+Except for the excluded claims described below, each party's total aggregate liability arising out of
+or related to this Agreement shall not exceed the total fees paid or payable by Customer in the twelve
+(12) months immediately preceding the event giving rise to the claim. Neither party shall be liable
+for indirect, incidental, special, consequential, or punitive damages, or for loss of profits,
+revenue, or anticipated savings, even if advised of the possibility of such damages.
+
+The limitation in this section does not apply to: a party's indemnification obligations; Customer's
+obligation to pay fees due; either party's breach of its confidentiality obligations; or liability
+that cannot be limited under applicable law. Provider's liability for a breach of its data protection
+obligations is capped at three (3) times the fees paid in the preceding twelve (12) months.
+
+6. INTELLECTUAL PROPERTY
+Provider retains all right, title, and interest in the platform, including all improvements and
+derivative works. Customer retains all right, title, and interest in Customer Data. Customer grants
+Provider a non-exclusive, worldwide, royalty-free licence to process Customer Data solely to provide
+and support the services, and to produce aggregated, de-identified statistics that do not identify
+Customer or any individual.
+
+7. CONFIDENTIALITY
+Each party shall protect the other's Confidential Information with at least the degree of care it
+uses for its own confidential information, and in no event less than reasonable care. Confidentiality
+obligations survive termination for five (5) years, except for trade secrets, which are protected for
+as long as they remain trade secrets under applicable law.
+
+8. DATA RETURN AND DELETION
+On termination or expiry, Provider shall make Customer Data available for export in a machine-readable
+format for thirty (30) days. After that period Provider shall delete Customer Data from production
+systems within sixty (60) days and from encrypted backups within one hundred and eighty (180) days,
+and shall certify deletion in writing on request.
+
+9. GOVERNING LAW AND DISPUTES
+This Agreement is governed by the laws of England and Wales, without regard to conflict of law rules.
+The parties submit to the exclusive jurisdiction of the courts of England and Wales. Before commencing
+proceedings, the parties shall escalate the dispute to their respective executive sponsors, who shall
+meet within twenty (20) business days to attempt resolution in good faith.
+
+10. ASSIGNMENT AND SUBCONTRACTING
+Neither party may assign this Agreement without the other's prior written consent, which shall not be
+unreasonably withheld, except that either party may assign to a successor in connection with a merger
+or sale of substantially all assets on written notice. Provider may engage subcontractors provided it
+remains fully responsible for their performance and for their compliance with this Agreement.

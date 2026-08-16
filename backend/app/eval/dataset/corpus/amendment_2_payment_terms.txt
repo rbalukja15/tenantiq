@@ -1,0 +1,60 @@
+AMENDMENT NO. 2 TO THE MASTER SERVICES AGREEMENT
+Between Northwind Technologies Ltd and Acme Industrial Group
+Effective 1 July 2026
+
+BACKGROUND
+The parties entered into a Master Services Agreement effective 1 February 2026 (the "Agreement").
+Amendment No. 1, effective 1 April 2026, adjusted the professional services rate card and is not
+affected by this Amendment. The parties now wish to amend the payment provisions of the Agreement as
+set out below. Capitalised terms not defined here have the meanings given in the Agreement.
+
+1. AMENDED PAYMENT PERIOD
+Section 3 (Fees and Payment) of the Agreement is amended by deleting the words "within thirty (30)
+days of the invoice date" and replacing them with "within forty-five (45) days of the invoice date".
+For the avoidance of doubt, the payment period under the Agreement is now forty-five (45) days from
+the invoice date for all invoices issued on or after the effective date of this Amendment. Invoices
+issued before that date remain payable on the previous thirty (30) day terms.
+
+2. EARLY PAYMENT DISCOUNT
+A new sub-section is added to Section 3. Where Customer pays an undisputed invoice in full within ten
+(10) days of the invoice date, Customer may deduct an early payment discount of two percent (2%) of
+the invoice value excluding tax. The early payment discount may not be combined with any other
+discount, credit, or rebate offered under the Agreement or any Order Form, and does not apply to
+pass-through expenses or third-party licence fees invoiced at cost.
+
+3. DISPUTE WINDOW
+The period for notifying a disputed invoice is extended from fifteen (15) days to twenty (20) days
+from receipt of the invoice. The remainder of the dispute mechanism in Section 3 is unchanged,
+including the requirement that Customer pay the undisputed portion of any disputed invoice when due.
+
+4. LATE PAYMENT INTEREST
+The interest rate on overdue undisputed amounts is reduced from one percent (1%) per month to
+zero point seven five percent (0.75%) per month, or the maximum rate permitted by law if lower.
+Interest accrues from the day after the applicable payment period expires.
+
+5. SUSPENSION THRESHOLD
+Provider's right to suspend the services for non-payment is amended so that suspension may be
+exercised only where undisputed amounts are more than ninety (90) days overdue, rather than sixty
+(60) days. The notice period before suspension remains ten (10) business days.
+
+6. INVOICING MECHANICS
+Provider shall issue invoices electronically to the billing contact named in the applicable Order
+Form, in PDF format, with a machine-readable summary in CSV attached. Provider shall include the
+Customer purchase order number on every invoice where Customer has supplied one. An invoice that
+omits a required purchase order number is not properly issued, and the payment period does not begin
+until a corrected invoice is received.
+
+7. ANNUAL REVIEW OF PAYMENT TERMS
+The parties shall review the payment terms in this Amendment at each anniversary of the Effective
+Date of the Agreement. Neither party is obliged to agree to a change, and the terms in this Amendment
+continue to apply unless and until replaced by a further written amendment signed by both parties.
+
+8. NO OTHER CHANGES
+Except as expressly amended by this Amendment, all terms of the Agreement, including the limitation
+of liability in Section 5, the termination provisions in Section 4, and the data return and deletion
+obligations in Section 8, remain in full force and effect. In the event of a conflict between this
+Amendment and the Agreement, this Amendment governs with respect to payment terms only.
+
+9. COUNTERPARTS
+This Amendment may be executed in counterparts, each of which is deemed an original and all of which
+together constitute one instrument. Electronic signatures are valid and binding.

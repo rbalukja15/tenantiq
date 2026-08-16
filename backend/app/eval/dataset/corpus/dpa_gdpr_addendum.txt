@@ -1,0 +1,72 @@
+DATA PROCESSING ADDENDUM
+Forming part of the Master Services Agreement between Northwind Technologies Ltd ("Processor") and
+Acme Industrial Group ("Controller")
+Effective 1 February 2026
+
+1. ROLES AND SCOPE
+Controller determines the purposes and means of processing Personal Data. Processor processes
+Personal Data only on documented instructions from Controller, including with regard to transfers to
+a third country, unless required to do so by law to which Processor is subject. Processor shall
+inform Controller of any such legal requirement before processing, unless that law prohibits it on
+important grounds of public interest.
+
+2. NATURE AND PURPOSE OF PROCESSING
+Processor processes Personal Data contained in documents Controller uploads to the platform, for the
+purpose of extraction, indexing, retrieval, and generating answers grounded in those documents. The
+categories of data subject may include Controller's employees, contractors, customers, and
+counterparties. Special categories of personal data should not be uploaded; where they are, Controller
+warrants it has a lawful basis under Article 9 of the UK GDPR.
+
+3. PERSONAL DATA BREACH NOTIFICATION
+Processor shall notify Controller without undue delay, and in any event within seventy-two (72) hours,
+after becoming aware of a Personal Data Breach affecting Controller's Personal Data. The notification
+shall describe the nature of the breach, the categories and approximate number of data subjects and
+records concerned, the likely consequences, and the measures taken or proposed to address it. Where
+the information cannot be provided at the same time, it may be provided in phases without further
+undue delay. Processor shall not notify any supervisory authority or data subject on Controller's
+behalf without Controller's prior written instruction.
+
+4. SUB-PROCESSORS
+Controller grants general written authorisation for Processor to engage sub-processors. The approved
+sub-processors as at the Effective Date are: Amazon Web Services EMEA SARL (hosting, Ireland),
+Cloudflare Inc (content delivery and denial-of-service protection, global edge), and Twilio Ireland
+Limited (transactional email and notifications, Ireland). Processor shall give Controller at least
+thirty (30) days prior written notice of any intended addition or replacement of a sub-processor, and
+Controller may object on reasonable data protection grounds within that period.
+
+Where Controller objects, the parties shall discuss in good faith. If no resolution is reached within
+thirty (30) days of the objection, Controller may terminate the affected services without penalty on
+written notice, and Processor shall refund prepaid fees for the terminated services covering the
+period after termination.
+
+5. INTERNATIONAL TRANSFERS
+Personal Data is stored and processed in the Republic of Ireland and the United Kingdom. Processor
+shall not transfer Personal Data outside the United Kingdom or the European Economic Area except
+under the UK International Data Transfer Addendum to the EU Standard Contractual Clauses, or another
+transfer mechanism recognised as providing an adequate level of protection. Processor shall carry out
+and document a transfer risk assessment before any such transfer and make it available on request.
+
+6. SECURITY OF PROCESSING
+Processor shall implement appropriate technical and organisational measures under Article 32 of the
+UK GDPR, described in the Information Security Policy referenced in the Agreement. Processor shall
+ensure that persons authorised to process Personal Data are bound by confidentiality obligations and
+receive data protection training at least annually.
+
+7. ASSISTANCE TO CONTROLLER
+Taking into account the nature of the processing, Processor shall assist Controller by appropriate
+technical and organisational measures in fulfilling Controller's obligation to respond to data
+subject requests. Processor shall forward any request it receives directly from a data subject to
+Controller within five (5) business days and shall not respond to it itself, except to confirm receipt
+and to direct the data subject to Controller.
+
+8. AUDIT AND INSPECTION
+Processor shall make available all information necessary to demonstrate compliance with this Addendum
+and shall allow for and contribute to audits, including inspections, conducted by Controller or an
+auditor mandated by Controller. Audits are limited to once in any twelve (12) month period unless a
+Personal Data Breach has occurred, and shall be conducted on at least thirty (30) days notice during
+normal business hours in a manner that does not unreasonably disrupt Processor's operations.
+
+9. DELETION AND RETURN
+On termination of the services, Processor shall delete or return all Personal Data at Controller's
+election, and delete existing copies unless law requires storage. Deletion timescales follow the data
+return and deletion provisions of the Agreement.
