@@ -25,4 +25,7 @@ eval: ## Measure retrieval quality against the curated dataset (real embedder, i
 	# the lexical stand-in can never be mistaken for a baseline (#21).
 	docker compose exec backend python -m app.eval.run
 
-.PHONY: help dev smoke test lint eval
+eval-faithfulness: ## Also generate + judge an answer per question (#22). Two model calls each: minutes.
+	docker compose exec backend python -m app.eval.run --faithfulness
+
+.PHONY: help dev smoke test lint eval eval-faithfulness

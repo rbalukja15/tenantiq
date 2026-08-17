@@ -236,3 +236,143 @@ def test_the_report_records_what_produced_it(tmp_path):
     assert configuration["top_k"] == 1
     assert configuration["chunk_target_tokens"] > 0
     assert payload["corpus"]["chunks"] >= 1
+
+
+# --- the faithfulness pass (#22) ----------------------------------------------------------------
+
+
+@requires_postgres
+def test_faithfulness_is_off_unless_asked_for(tmp_path):
+    # Two model calls per question is minutes, not seconds, so `make eval` must stay a fast retrieval
+    # check and the grounding pass must be opt-in.
+    data = _dataset(
+        tmp_path,
+        {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
+        [{"id": "pay", "question": "When is an invoice due?", "markers": ["forty-five days"]}],
+    )
+
+    report = evaluate(dataset=data, top_k=1)
+
+    assert report.faithfulness is None
+    assert as_dict(report)["faithfulness"] is None
+
+
+@requires_postgres
+def test_it_generates_and_judges_an_answer_per_question(tmp_path):
+    data = _dataset(
+        tmp_path,
+        {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
+        [{"id": "pay", "question": "When is an invoice due?", "markers": ["forty-five days"]}],
+    )
+
+    report = evaluate(dataset=data, top_k=1, faithfulness=True)
+
+    grounding = report.faithfulness
+    assert grounding is not None
+    assert len(grounding.answers) == 1
+    # The answer came from the product's own generation path, so it carries a resolvable citation.
+    assert grounding.total_claims >= 1
+    assert grounding.answers[0].answer
+
+
+@requires_postgres
+def test_a_run_judged_by_the_fake_says_it_is_not_a_measurement(tmp_path):
+    # FakeJudge checks lexical containment rather than reading anything. Its numbers look exactly
+    # like real ones in a table, which is why the report has to disown them.
+    data = _dataset(
+        tmp_path,
+        {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
+        [{"id": "pay", "question": "When is an invoice due?", "markers": ["forty-five days"]}],
+    )
+
+    report = evaluate(dataset=data, top_k=1, faithfulness=True)
+
+    assert any("FakeJudge" in warning for warning in report.warnings)
+    assert "not a grounding measurement" in as_text(report)
+
+
+@requires_postgres
+def test_the_report_renders_the_grounding_section(tmp_path):
+    data = _dataset(
+        tmp_path,
+        {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
+        [{"id": "pay", "question": "When is an invoice due?", "markers": ["forty-five days"]}],
+    )
+
+    text = as_text(evaluate(dataset=data, top_k=1, faithfulness=True))
+
+    assert "Answer faithfulness" in text
+    assert "supported / all claims" in text
+    assert "supported / cited claims" in text
+
+
+class _DivergentLLM:
+    """Returns different text on the streaming and non-streaming paths, so a test can tell which
+    one the harness actually read."""
+
+    model = "divergent-llm"
+
+    def generate(self, system_prompt, user_prompt):  # noqa: ARG002
+        from app.generation import LLMResult
+
+        return LLMResult(answer="STRUCTURED PATH, no marker", citations=(1,))
+
+    def stream(self, system_prompt, user_prompt):  # noqa: ARG002
+        yield "STREAMED PATH, with a marker [1]."
+
+
+class _BrokenLLM:
+    model = "broken-llm"
+
+    def generate(self, system_prompt, user_prompt):  # noqa: ARG002
+        raise RuntimeError("boom")
+
+    def stream(self, system_prompt, user_prompt):  # noqa: ARG002
+        raise RuntimeError("boom")
+        yield ""  # pragma: no cover — makes this a generator
+
+
+@requires_postgres
+def test_faithfulness_measures_the_answer_the_product_streams(tmp_path, settings):
+    """The bug this pins cost a whole 16-minute run and reported a meaningless 0.05.
+
+    The two generation paths cite differently. The non-streaming path returns structured
+    `{answer, citations}` — an *answer-level* citation list, with no `[n]` markers required in the
+    prose, so per-claim grounding is not even expressible on it. The streaming path (#48), which is
+    what the SSE endpoint and therefore every user receives, cites inline. Measuring prose markers
+    against the structured path reported a citation coverage of 0.05 that said nothing about the
+    model and everything about the harness reading the wrong output.
+    """
+    settings.TENANTIQ_LLM_FACTORY = lambda: _DivergentLLM()
+    data = _dataset(
+        tmp_path,
+        {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
+        [{"id": "pay", "question": "When is an invoice due?", "markers": ["forty-five days"]}],
+    )
+
+    report = evaluate(dataset=data, top_k=1, faithfulness=True)
+
+    answer = report.faithfulness.answers[0]
+    assert "STREAMED PATH" in answer.answer
+    assert "STRUCTURED PATH" not in answer.answer
+    # And because the streamed prose carries the marker, the claim is citable at all.
+    assert answer.cited_claims
+
+
+@requires_postgres
+def test_a_generation_failure_is_a_recorded_gap_not_a_dead_run(tmp_path, settings):
+    # `stream_grounded_answer` turns a backend failure into an ErrorEvent rather than raising, so
+    # without handling it the harness would score an empty answer as a real, badly-grounded one.
+    settings.TENANTIQ_LLM_FACTORY = lambda: _BrokenLLM()
+    data = _dataset(
+        tmp_path,
+        {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
+        [{"id": "pay", "question": "When is an invoice due?", "markers": ["forty-five days"]}],
+    )
+
+    report = evaluate(dataset=data, top_k=1, faithfulness=True)
+
+    grounding = report.faithfulness
+    assert len(grounding.failed) == 1
+    assert grounding.measured == ()
+    assert grounding.total_claims == 0  # nothing was scored

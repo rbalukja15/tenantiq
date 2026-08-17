@@ -224,6 +224,30 @@ TENANTIQ_LLM_MODEL = os.environ.get("TENANTIQ_LLM_MODEL", "claude-opus-4-8")
 TENANTIQ_LLM_MAX_TOKENS = int(os.environ.get("TENANTIQ_LLM_MAX_TOKENS", "1024"))
 TENANTIQ_LLM_OLLAMA_MODEL = os.environ.get("TENANTIQ_LLM_OLLAMA_MODEL", "llama3.1")
 TENANTIQ_LLM_TIMEOUT_SECONDS = int(os.environ.get("TENANTIQ_LLM_TIMEOUT_SECONDS", "60"))
+# Faithfulness evaluation — the LLM-as-judge (M5, #22). Pluggable on the same seam as the answer
+# LLM and the embedder: a deterministic fake under pytest so the suite never touches a network, the
+# Anthropic Messages API when a key is configured, an Ollama fallback otherwise.
+#
+# The judge model is configured SEPARATELY from the answer model on purpose. Scoring an answer with
+# the model that wrote it is self-assessment, which is known-optimistic — so the two are at least
+# independently settable, and the report states whenever they resolved to the same model anyway
+# (which they do by default in local development, where both are Ollama).
+TENANTIQ_EVAL_JUDGE_MODEL = os.environ.get("TENANTIQ_EVAL_JUDGE_MODEL", "claude-opus-4-8")
+TENANTIQ_EVAL_JUDGE_OLLAMA_MODEL = os.environ.get("TENANTIQ_EVAL_JUDGE_OLLAMA_MODEL", "llama3.1")
+TENANTIQ_EVAL_JUDGE_TIMEOUT = int(os.environ.get("TENANTIQ_EVAL_JUDGE_TIMEOUT", "180"))
+# Ollama defaults llama3.1 to a 4096-token context, which the judge prompt (up to TOP_K
+# verbatim chunks plus the claims) exceeds. Sized to fit; lower it on a memory-constrained
+# machine, at the cost of losing the questions that retrieved the most evidence.
+TENANTIQ_EVAL_JUDGE_NUM_CTX = int(os.environ.get("TENANTIQ_EVAL_JUDGE_NUM_CTX", "8192"))
+TENANTIQ_EVAL_JUDGE_FACTORY = os.environ.get(
+    "TENANTIQ_EVAL_JUDGE_FACTORY",
+    (
+        "app.eval.judge.build_fake_judge"
+        if "pytest" in sys.modules
+        else "app.eval.judge.build_default_judge"
+    ),
+)
+
 TENANTIQ_LLM_FACTORY = os.environ.get(
     "TENANTIQ_LLM_FACTORY",
     (
