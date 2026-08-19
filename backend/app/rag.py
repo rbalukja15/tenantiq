@@ -81,6 +81,27 @@ _NO_CONTEXT_NOTE = (
 )
 
 
+def worst_case_prompt_tokens() -> int:
+    """The largest grounded prompt the current settings can produce, in estimator tokens (#90).
+
+    Computed from configuration rather than measured from traffic, so a deployment can be checked
+    before it serves anything: retrieval returns at most ``TOP_K`` chunks of at most
+    ``CHUNK_TARGET_TOKENS`` each, and the system prompt and fences are fixed. This is what lets a
+    raised ``TOP_K`` or chunk size fail a test instead of failing on whichever question happens to
+    retrieve the most text.
+
+    It lives here, beside :func:`build_grounded_prompt`, because this module is the one that decides
+    how large a prompt gets. A copy anywhere else is a second answer to the same question.
+    """
+    from app.chunking import estimate_tokens
+
+    sources = settings.TENANTIQ_RETRIEVAL_TOP_K * settings.TENANTIQ_CHUNK_TARGET_TOKENS
+    # Per-source fence markers plus the question. Generous on purpose: this number exists to catch a
+    # window that is too small, so erring high is the safe direction.
+    overhead = 64 * settings.TENANTIQ_RETRIEVAL_TOP_K + 128
+    return sources + estimate_tokens(_SYSTEM_PROMPT) + overhead
+
+
 def build_grounded_prompt(question: str, sources: tuple[Source, ...]) -> tuple[str, str]:
     """Return ``(system_prompt, user_prompt)`` for ``question`` grounded in ``sources``.
 

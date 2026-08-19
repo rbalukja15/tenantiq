@@ -117,6 +117,24 @@ class LLMClient(Protocol):
 
 _REFUSAL_TEXT = "I don't have relevant information in your documents to answer that question."
 
+#: Shown when the prompt cannot fit the model's context window (#90). Deliberately does **not** say
+#: "please try again": the overflow is deterministic for a given question, so retrying sends the user
+#: into a loop. It also names no host, model or setting — what a tenant sees stays sanitized and the
+#: numbers go to the log (#47).
+_CONTEXT_TEXT = (
+    "This question could not be answered: the configured model cannot read a prompt this large. "
+    "Retrying will not help — this needs a configuration change."
+)
+
+
+class ContextWindowExceeded(RuntimeError):
+    """The assembled prompt is larger than the model's context window.
+
+    Its own type because it is the one generation failure that is **not** transient. Every other
+    backend error is worth a retry; this one fails identically every time until somebody changes the
+    configuration, and telling a user to try again is worse than telling them nothing.
+    """
+
 
 def generate_answer(context: AssembledContext, *, llm: LLMClient | None = None) -> GroundedAnswer:
     """Generate a grounded, cited answer for ``context``.
@@ -162,7 +180,12 @@ def stream_grounded_answer(
         for delta in llm.stream(context.system_prompt, context.user_prompt):
             chunks.append(delta)
             yield TokenEvent(text=delta)
-    except Exception:  # noqa: BLE001 — any backend failure becomes a clean error event
+    except ContextWindowExceeded:
+        # Not transient, so it does not get the retry copy (#90).
+        logger.exception("answer generation aborted: prompt exceeds the model's context window")
+        yield ErrorEvent(message=_CONTEXT_TEXT)
+        return
+    except Exception:  # noqa: BLE001 — any other backend failure becomes a clean error event
         logger.exception("answer generation failed mid-stream")
         yield ErrorEvent(message="Answer generation failed. Please try again.")
         return
@@ -264,14 +287,26 @@ class AnthropicLLM:
     then valid JSON. Not exercised by the hermetic suite (needs a key + network) — the parsing it feeds
     is covered via :func:`_coerce_result`."""
 
-    def __init__(self, *, model: str | None = None, max_tokens: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        timeout: int | None = None,
+    ) -> None:
         self.model = model or settings.TENANTIQ_LLM_MODEL
         self.max_tokens = max_tokens or settings.TENANTIQ_LLM_MAX_TOKENS
+        # `TENANTIQ_LLM_TIMEOUT_SECONDS` reads as the timeout for *the* LLM, but until #90 the only
+        # backend that honoured it was Ollama — and #90 gave the local path its own, longer value,
+        # which would have left this one configuring nothing at all. Wiring it here makes the name
+        # true rather than deleting the knob: a setting that silently does nothing is worse than
+        # either.
+        self.timeout = timeout or settings.TENANTIQ_LLM_TIMEOUT_SECONDS
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         import anthropic
 
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(timeout=self.timeout)
         response = client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -285,7 +320,7 @@ class AnthropicLLM:
     def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
         import anthropic
 
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(timeout=self.timeout)
         # Stream prose (with inline [n] markers) rather than structured output — the endpoint (#48)
         # resolves citations from the markers once the text is complete.
         with client.messages.stream(
@@ -301,16 +336,50 @@ class OllamaLLM:
     """Local fallback: an Ollama chat model constrained to JSON via ``format`` (mirrors OllamaEmbedder).
     Keeps ``make dev`` answering without an Anthropic key. Not hermetically tested."""
 
-    def __init__(self, *, model: str | None = None, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        base_url: str | None = None,
+        num_ctx: int | None = None,
+    ) -> None:
         self.model = model or settings.TENANTIQ_LLM_OLLAMA_MODEL
         self.base_url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
+        # Ollama's own default is 4096, smaller than the prompt this product builds (#90): a question
+        # retrieving five full-size chunks overflows it and comes back as an opaque HTTP 500.
+        self.num_ctx = num_ctx or settings.TENANTIQ_LLM_NUM_CTX
+
+    def _guard_context(self, system_prompt: str, user_prompt: str) -> None:
+        """Refuse a prompt that cannot fit, *before* spending a request on it.
+
+        The backend's own answer to an overflow is an opaque HTTP 500, indistinguishable from a
+        crash, which earns the "please try again" copy that sends a user into a loop. Checking first
+        lets the failure say what it actually is.
+        """
+        from app.chunking import estimate_tokens
+
+        needed = (
+            estimate_tokens(system_prompt)
+            + estimate_tokens(user_prompt)
+            + settings.TENANTIQ_LLM_RESPONSE_HEADROOM_TOKENS
+        )
+        if needed > self.num_ctx:
+            raise ContextWindowExceeded(
+                f"prompt needs ~{needed} tokens (including "
+                f"{settings.TENANTIQ_LLM_RESPONSE_HEADROOM_TOKENS} reserved for the answer) but "
+                f"{self.model!r} is configured with a {self.num_ctx}-token context. Raise "
+                f"TENANTIQ_LLM_NUM_CTX, or lower TENANTIQ_RETRIEVAL_TOP_K / "
+                f"TENANTIQ_CHUNK_TARGET_TOKENS."
+            )
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self._guard_context(system_prompt, user_prompt)
         payload = json.dumps(
             {
                 "model": self.model,
                 "stream": False,
                 "format": _ANSWER_SCHEMA,
+                "options": {"num_ctx": self.num_ctx},
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -322,15 +391,17 @@ class OllamaLLM:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with _urlrequest.urlopen(req, timeout=settings.TENANTIQ_LLM_TIMEOUT_SECONDS) as resp:
+        with _urlrequest.urlopen(req, timeout=settings.TENANTIQ_LLM_OLLAMA_TIMEOUT_SECONDS) as resp:
             body = json.loads(resp.read())
         return _coerce_result(json.loads(body["message"]["content"]))
 
     def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        self._guard_context(system_prompt, user_prompt)
         payload = json.dumps(
             {
                 "model": self.model,
                 "stream": True,
+                "options": {"num_ctx": self.num_ctx},
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -343,7 +414,7 @@ class OllamaLLM:
             headers={"Content-Type": "application/json"},
         )
         # Ollama streams NDJSON: one JSON object per line, each carrying a message-content delta.
-        with _urlrequest.urlopen(req, timeout=settings.TENANTIQ_LLM_TIMEOUT_SECONDS) as resp:
+        with _urlrequest.urlopen(req, timeout=settings.TENANTIQ_LLM_OLLAMA_TIMEOUT_SECONDS) as resp:
             for line in resp:
                 line = line.strip()
                 if not line:
