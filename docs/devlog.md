@@ -1250,3 +1250,50 @@ the model-free half of the metrics, which no judge touches.
 Retrieval numbers were identical to #21's across a third run: hit@1 0.56, hit@3 1.00, MRR 0.75.
 
 387 backend tests, up from 345.
+
+## 2026-08-19 — M6 #76: the flake was not a flake
+
+`test_nearest_chunks_not_starved_by_a_neighbourhood_dominating_tenant` had been failing
+intermittently for weeks and was written off as a known flake — measured at roughly 1-in-30 when it
+was filed. Today it turned two consecutive pull requests red, which is not what 1-in-30 looks like,
+and the second red run is what finally made me stop re-running CI and go and measure it.
+
+It is not random. It is **test-order contamination**, and #21/#22 caused it:
+
+```
+test_retrieval.py alone .................. 0/5 fail
+eval tests first, then retrieval ......... 2/5 fail   (branch)
+eval tests first, then retrieval ......... 2/5 fail   (origin/main)
+```
+
+pytest collects alphabetically, so `test_eval_harness.py` runs before `test_retrieval.py` in every
+full-suite run. The eval harness ingests a seven-document corpus through the real pipeline, and one of
+its tests uses `transaction=True` for real commits — so by the time the retrieval test runs, the
+`app_chunk` HNSW index carries the churn. Roughly 40% of CI runs, on pull requests that had touched
+nothing near retrieval.
+
+**The test was asserting something pgvector never promised.** `assert len(results) == 5` is perfect
+recall from an approximate index running on a bounded scan budget under `relaxed_order`. Anything that
+spends that budget — index churn, dead tuples, a different pgvector build — takes the last row away.
+The assertion was true when it was written because the index happened to be pristine, which is a
+property of the test suite, not of the system under test.
+
+What #44 actually guarantees is narrower and more interesting: iterative scanning **rescues** a tenant
+that the bounded scan would have abandoned. So the test now runs the same query twice against the same
+fixture — once with `hnsw.iterative_scan = off`, once through the production path — and asserts the
+rescue happened, plus that the fixture still reproduces starvation at all. A delta, not an absolute.
+That property holds whatever state the index is in, which is the whole point.
+
+Verified both directions, because a regression test nobody has seen fail is a decoration:
+
+- **0 failures in 12 runs** of the exact order that was failing 40% of the time;
+- **fails with `#44` reverted** — disable iterative scan in `nearest_chunks` and the rescue returns
+  an empty list, so the delta assertion collapses.
+
+The lesson is the one this project keeps relearning from a different angle. "Known flake" is a
+diagnosis, and I never made it — I inherited a number from an earlier session, kept quoting it after
+the evidence stopped fitting, and re-ran CI twice instead of spending ten minutes measuring. The
+failure had a cause the whole time, the cause was my own recent work, and the test had been asserting
+the wrong thing since the day it was written.
+
+390 backend tests.
