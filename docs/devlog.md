@@ -1250,3 +1250,57 @@ the model-free half of the metrics, which no judge touches.
 Retrieval numbers were identical to #21's across a third run: hit@1 0.56, hit@3 1.00, MRR 0.75.
 
 387 backend tests, up from 345.
+
+## 2026-08-17 — M6 #90: the local model could not read the prompt we built for it
+
+Found by #22's faithfulness harness, which could not measure a quarter of its questions. Ollama runs
+`llama3.1` with a **4096-token** context; the grounded prompt at the shipped defaults is
+`TOP_K (5) × CHUNK_TARGET_TOKENS (800)` = 4,000 tokens of sources before the system prompt, so the
+worst case is ~4,400 tokens.
+
+It overflows by about **7%**, and that near-miss is the whole reason nobody caught it: a question
+retrieving five full-size chunks failed, one retrieving a document's short trailing chunk succeeded.
+It read as flakiness. The user got _"Answer generation failed. Please try again"_ — advice that could
+never work, because the overflow is deterministic for a given question.
+
+**The fix is not to shrink the prompt.** The tempting one-liner is lowering `TOP_K`, and #21's
+evaluation is the reason not to: the correct passage is often at rank 2 or 3, so a smaller `k` would
+trade measured answer quality for one backend's default. The prompt is the right size; the window was
+too small. `TENANTIQ_LLM_NUM_CTX` (8192) is now passed on every Ollama request.
+
+**The guard is worth more than the setting.** `worst_case_prompt_tokens()` computes the largest
+prompt the current configuration can build — from `TOP_K`, `CHUNK_TARGET_TOKENS` and the system
+prompt, not from traffic — and a test asserts it fits the configured window. Raising `TOP_K` or the
+chunk size now fails the suite instead of failing on whichever question happens to retrieve the most
+text. That is the same bug arriving by a different route, closed in advance.
+
+**And the error stops lying.** A prompt that genuinely cannot fit raises `ContextWindowExceeded`
+_before_ the request, so the failure can say what it is: the log names the token counts, the model and
+the three settings that could change it, while the tenant sees a sanitized message that explicitly
+says retrying will not help (#47's rule — the reason a tenant sees is never the reason in the log). An
+ordinary backend failure keeps its "please try again" copy, because that distinction is the point.
+
+**Fixing it exposed the next thing, which is the useful part of verifying against the real stack.**
+With the window sized correctly the request stopped 500ing and started _timing out_ — same
+user-visible outcome, different exception. `TENANTIQ_LLM_TIMEOUT_SECONDS` is 60, which is right for a
+hosted API and wrong for CPU inference over a 4,000-token prompt, especially on the first call after a
+context resize forces a model reload. The local backend now has its own
+`TENANTIQ_LLM_OLLAMA_TIMEOUT_SECONDS` (300); hosted backends keep the shorter one, where 60 seconds
+really does mean something is wrong.
+
+Verified against the running stack with exactly the worst-case prompt the settings permit: at
+`num_ctx=4096` it produces the honest configuration error, and at 8192 it answers in 19 seconds —
+_"According to all five sources, the customer has 45 days to pay an undisputed invoice. [1][2][3][4][5]"_.
+
+One thing the split orphaned, caught on the way out: `TENANTIQ_LLM_TIMEOUT_SECONDS` reads as the
+timeout for _the_ LLM, but the only backend that had ever honoured it was Ollama — so moving the
+local path onto its own value left it configuring nothing at all. Rather than delete the knob it is
+now wired to the hosted client, which is what the name always implied. A setting an operator can
+set that silently does nothing is the same trap as a documented-but-unforwarded compose variable,
+and this change would have created one.
+
+Deferred, deliberately: token-budgeted prompt assembly — knowing the model's window and trimming the
+lowest-scoring sources to fit, rather than assuming they do — is the grown-up fix and is
+provider-aware by nature, so it belongs with #53 alongside re-deriving the similarity floor (#88).
+
+359 backend tests, up from 345.

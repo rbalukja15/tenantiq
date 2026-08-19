@@ -224,6 +224,23 @@ TENANTIQ_LLM_MODEL = os.environ.get("TENANTIQ_LLM_MODEL", "claude-opus-4-8")
 TENANTIQ_LLM_MAX_TOKENS = int(os.environ.get("TENANTIQ_LLM_MAX_TOKENS", "1024"))
 TENANTIQ_LLM_OLLAMA_MODEL = os.environ.get("TENANTIQ_LLM_OLLAMA_MODEL", "llama3.1")
 TENANTIQ_LLM_TIMEOUT_SECONDS = int(os.environ.get("TENANTIQ_LLM_TIMEOUT_SECONDS", "60"))
+# The context window the *local* model is run with (#90). Ollama defaults llama3.1 to 4096 tokens,
+# which is smaller than the prompt this product builds: TOP_K x CHUNK_TARGET_TOKENS is 4,000 tokens
+# of sources before the system prompt, so a question that retrieves five full-size chunks overflows
+# by ~7% and comes back as an HTTP 500. Hosted models (Anthropic: 200k) are unaffected and ignore
+# this. RESPONSE_HEADROOM reserves room for the answer itself, since the window covers both.
+TENANTIQ_LLM_NUM_CTX = int(os.environ.get("TENANTIQ_LLM_NUM_CTX", "8192"))
+# The local backend gets its own, longer timeout. TENANTIQ_LLM_TIMEOUT_SECONDS was sized for a hosted
+# API; CPU inference over a prompt this size is minutes, not seconds, so the shared 60s value turned
+# the #90 fix into a timeout instead of a 500 — a different failure with the same user-visible
+# outcome. Hosted backends keep the shorter timeout, where 60s really does mean something is wrong.
+TENANTIQ_LLM_OLLAMA_TIMEOUT_SECONDS = int(
+    os.environ.get("TENANTIQ_LLM_OLLAMA_TIMEOUT_SECONDS", "300")
+)
+TENANTIQ_LLM_RESPONSE_HEADROOM_TOKENS = int(
+    os.environ.get("TENANTIQ_LLM_RESPONSE_HEADROOM_TOKENS", "512")
+)
+
 # Faithfulness evaluation — the LLM-as-judge (M5, #22). Pluggable on the same seam as the answer
 # LLM and the embedder: a deterministic fake under pytest so the suite never touches a network, the
 # Anthropic Messages API when a key is configured, an Ollama fallback otherwise.
@@ -235,9 +252,9 @@ TENANTIQ_LLM_TIMEOUT_SECONDS = int(os.environ.get("TENANTIQ_LLM_TIMEOUT_SECONDS"
 TENANTIQ_EVAL_JUDGE_MODEL = os.environ.get("TENANTIQ_EVAL_JUDGE_MODEL", "claude-opus-4-8")
 TENANTIQ_EVAL_JUDGE_OLLAMA_MODEL = os.environ.get("TENANTIQ_EVAL_JUDGE_OLLAMA_MODEL", "llama3.1")
 TENANTIQ_EVAL_JUDGE_TIMEOUT = int(os.environ.get("TENANTIQ_EVAL_JUDGE_TIMEOUT", "180"))
-# Ollama defaults llama3.1 to a 4096-token context, which the judge prompt (up to TOP_K
-# verbatim chunks plus the claims) exceeds. Sized to fit; lower it on a memory-constrained
-# machine, at the cost of losing the questions that retrieved the most evidence.
+# The judge prompt carries up to TOP_K verbatim chunks plus the claims, so it overflows Ollama's
+# 4096-token default for the same reason the answer prompt does (#90, above). Sized to fit; lower it
+# on a memory-constrained machine, at the cost of losing the questions that retrieved most evidence.
 TENANTIQ_EVAL_JUDGE_NUM_CTX = int(os.environ.get("TENANTIQ_EVAL_JUDGE_NUM_CTX", "8192"))
 TENANTIQ_EVAL_JUDGE_FACTORY = os.environ.get(
     "TENANTIQ_EVAL_JUDGE_FACTORY",
