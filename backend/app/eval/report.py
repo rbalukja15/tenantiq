@@ -67,8 +67,58 @@ def as_dict(report: Report) -> dict:
             }
             for r in report.out_of_corpus
         ],
+        "faithfulness": _faithfulness_as_dict(report),
         "warnings": list(report.warnings),
         "seconds": round(report.seconds, 2),
+    }
+
+
+def _faithfulness_as_dict(report: Report) -> dict | None:
+    grounding = report.faithfulness
+    if grounding is None:
+        return None
+    return {
+        "judge_model": grounding.judge_model,
+        "generator_model": grounding.generator_model,
+        "judge_is_the_generator": grounding.judge_is_the_generator,
+        "totals": {
+            "answers": len(grounding.answers),
+            "answers_measured": len(grounding.measured),
+            "claims": grounding.total_claims,
+            "cited_claims": grounding.total_cited_claims,
+            "unsupported_claims": grounding.unsupported_claims,
+            "unclear_claims": grounding.unclear_claims,
+            "uncited_numeric_claims": grounding.uncited_numeric_claims,
+            "invented_citations": grounding.invented_citations,
+        },
+        "scores": {
+            "grounded": round(grounding.grounded, 4),
+            "faithfulness": round(grounding.faithfulness, 4),
+            "citation_coverage": round(grounding.citation_coverage, 4),
+        },
+        "answers": [
+            {
+                "id": answer.question.id,
+                "answer": answer.answer,
+                "refused": answer.refused,
+                "claims": len(answer.claims),
+                "cited_claims": len(answer.cited_claims),
+                "supported": answer.supported,
+                "unsupported": answer.unsupported,
+                "unclear": answer.unclear,
+                "uncited_numeric_claims": [c.text for c in answer.uncited_numeric_claims],
+                "invented_citations": list(answer.invented_citations),
+                "error": answer.error,
+                # The judge's own reasons, kept verbatim: a faithfulness score nobody can audit is
+                # just a number, and the reasons are how a disagreement gets settled.
+                "unsupported_reasons": [
+                    {"claim": answer.claims[v.index].text, "reason": v.reason}
+                    for v in answer.verdicts
+                    if v.is_unsupported
+                ],
+            }
+            for answer in grounding.answers
+        ],
     }
 
 
@@ -176,9 +226,85 @@ def as_text(report: Report) -> str:
                 "chosen, not something the floor was applied to."
             )
         )
+    if report.faithfulness is not None:
+        add("")
+        lines.extend(_faithfulness_lines(report.faithfulness))
+
     add("")
     add(f"  completed in {report.seconds:.1f}s")
     return "\n".join(lines)
+
+
+def _faithfulness_lines(grounding) -> list[str]:
+    """The #22 section: is the answer actually supported by what it cites?"""
+    lines: list[str] = []
+    add = lines.append
+
+    add("  Answer faithfulness (#22)")
+    add(f"  {'-' * 74}")
+    add(f"  generator       {grounding.generator_model}")
+    add(f"  judge           {grounding.judge_model}")
+    add("")
+    add(f"  {'grounded':<22}{grounding.grounded:.2f}   (supported / all claims)")
+    add(f"  {'faithfulness':<22}{grounding.faithfulness:.2f}   (supported / cited claims)")
+    add(f"  {'citation coverage':<22}{grounding.citation_coverage:.2f}   (cited / all claims)")
+    add("")
+    add(f"  answers measured        {len(grounding.measured)} of {len(grounding.answers)}")
+    add(f"  claims                  {grounding.total_claims}")
+    add(f"  unsupported             {grounding.unsupported_claims}")
+    add(f"  unclear                 {grounding.unclear_claims}")
+    add(f"  uncited numeric claims  {grounding.uncited_numeric_claims}")
+    add(f"  invented citations      {grounding.invented_citations}")
+    add("")
+
+    if grounding.failed:
+        # Reported before the scores, not after: a number computed over eleven of eighteen questions
+        # is a different number, and finding that out below the table is finding it out too late.
+        add(f"  {len(grounding.failed)} question(s) produced no measurement:")
+        for answer in grounding.failed:
+            add(f"    {answer.question.id}: {_clip(answer.error, 60)}")
+        add("")
+        add(
+            _wrap(
+                "Those are excluded from every score above — a model call that timed out says nothing "
+                "about grounding, and counting it either way would put infrastructure noise in the "
+                "headline. The scores describe the questions that were measured, and the count says "
+                "how many that was."
+            )
+        )
+        add("")
+    add(
+        _wrap(
+            "'grounded' is the headline and the harsher number: an uncited claim counts as ungrounded "
+            "whether or not a source exists that would have backed it. Reporting only 'faithfulness' "
+            "would let an answer that cites one sentence in six score 1.00."
+        )
+    )
+
+    if grounding.invented_citations or grounding.uncited_numeric_claims:
+        add("")
+        add("  Contract violations")
+        add(f"  {'-' * 74}")
+        for answer in grounding.answers:
+            for number in answer.invented_citations:
+                add(f"  {answer.question.id}: cites [{number}], which was never a source")
+            for claim in answer.uncited_numeric_claims:
+                add(f"  {answer.question.id}: uncited figure — {_clip(claim.text)}")
+        add("")
+        add(
+            _wrap(
+                "Both are direct violations of the grounding contract, not quality signals: the "
+                "project's rules are that the LLM never computes numbers and never invents citations. "
+                "An invented marker survives in the prose even though generation drops it from the "
+                "resolved citation list, so nothing but this notices it."
+            )
+        )
+    return lines
+
+
+def _clip(text: str, width: int = 64) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= width else text[: width - 1] + "…"
 
 
 def _verdict_on_configured_floor(configured: float, low: float, high: float) -> str:

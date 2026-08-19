@@ -38,6 +38,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="also write the full report as JSON to this path, for diffing two runs",
     )
     parser.add_argument(
+        "--faithfulness",
+        action="store_true",
+        help=(
+            "also generate an answer per question and have an LLM judge rule on every claim in it "
+            "(#22). Two model calls per question, so minutes rather than seconds"
+        ),
+    )
+    parser.add_argument(
         "--fail-under",
         type=float,
         default=None,
@@ -61,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     from app.eval.report import as_dict, as_text
 
     try:
-        report = evaluate(top_k=args.k)
+        report = evaluate(top_k=args.k, faithfulness=args.faithfulness)
     except (DatasetError, EvaluationError) as exc:
         # A broken dataset or a corpus that would not ingest is not a bad score — it is the absence
         # of a measurement, and printing a table of zeros would be the worst possible response.

@@ -20,10 +20,10 @@ A production-shaped RAG system built in the open — one reviewed PR per issue, 
 - **Tenant isolation is proven, not promised.** Each tenant's data is walled off by **two independent layers** — a scoped ORM manager _and_ forced Postgres row-level security. An [adversarial test suite](backend/tests/test_tenant_isolation.py) shows the database still blocks a cross-tenant read _with the application filter deliberately removed_. Design: [`docs/tenant-isolation.md`](docs/tenant-isolation.md).
 - **Grounding is a hard contract, enforced end to end.** The LLM never computes numbers and never invents citations — answers stay grounded in retrieved tenant-scoped chunks, every citation resolves to a real chunk ID, and the UI will only make a `[1]` clickable once it has fetched the passage behind it. When nothing relevant is retrieved, the product refuses and says so rather than answering thinly.
 - **Engineered like a product.** Async ingestion (parse → chunk → embed) with retries and observability, a browser UI that streams an answer beside the passages it cites and manages the corpus that feeds it, and a one-command Docker stack (`make dev`) that brings up the whole system.
-- **Retrieval quality is measured, not asserted.** `make eval` runs a curated question set through the real ingestion and retrieval path and reports precision@k, recall@k, hit@k and MRR, stamped with the embedder that produced them. First baseline: **hit@3 1.00, MRR 0.75** — and it immediately surfaced that the shipped similarity floor of `0.0` refuses nothing, so the product cannot decline a question it has no evidence for. Method, numbers and limitations: [`docs/evaluation.md`](docs/evaluation.md).
+- **Retrieval quality is measured, not asserted.** `make eval` runs a curated question set through the real ingestion and retrieval path and reports precision@k, recall@k, hit@k and MRR, stamped with the embedder that produced them. First baselines: **hit@3 1.00, MRR 0.75** for retrieval; for grounding, **zero invented citations across 50 claims** but only **half the claims cited at all** and 18 stating a figure with nothing behind it. The harness also surfaced that the shipped similarity floor of `0.0` refuses nothing, so the product cannot decline a question it has no evidence for. Method, numbers and limitations: [`docs/evaluation.md`](docs/evaluation.md).
 - **Decisions are written down.** Seventeen [Architecture Decision Records](docs/adr) explain the _why_ behind the stack, isolation model, chunking, embeddings, streaming, the frontend, and deployment.
 
-**Status:** M0–M4 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers, and the frontend that uses them); M5 (evaluation harness) next. See the [Roadmap](#roadmap).
+**Status:** M0–M5 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers, the frontend that uses them, and an evaluation harness that measures both retrieval and answer faithfulness); M6 (deployment) next. See the [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -60,7 +60,8 @@ make dev      # full stack via Docker Compose: Postgres(pgvector) + Redis + Olla
 make smoke    # push a sample doc through the running stack and wait for READY (real worker + embedder)
 make test     # pytest + vitest
 make lint     # ruff + black + eslint
-make eval     # retrieval + faithfulness evaluation suite — lands in M5 (currently a stub)
+make eval     # retrieval metrics against the curated dataset (seconds)
+make eval-faithfulness  # also generates and judges an answer per question (minutes)
 ```
 
 `make dev` seeds `.env` from `.env.example` on first run and needs only Docker. A fresh clone comes up on Postgres with row-level security enforced — never silently on SQLite.
@@ -74,7 +75,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - **M2** ✅ Document ingestion pipeline — parse, chunk, embed, with retries & observability
 - **M3** ✅ RAG query engine — retrieval hardening, grounded generation, SSE streaming, guardrails, per-tenant limits & cost accounting
 - **M4** ✅ Frontend & streaming UX — app shell + OIDC via a BFF, design system, the streaming ask screen with clickable citations, and document management (upload with progress, live ingestion status, delete)
-- **M5** 🚧 Evaluation harness — retrieval metrics landed (`make eval`); answer faithfulness next
+- **M5** ✅ Evaluation harness — retrieval metrics and answer faithfulness, both measured against the real pipeline (`make eval`, `make eval-faithfulness`)
 - **M6** 🚧 Deployment & CI/CD — one-command Docker Compose stack landed
 - **M7** ⬜ Observability & cost dashboard
 - **M8** ⬜ Polish & recruiter-ready docs
