@@ -1351,3 +1351,55 @@ failure had a cause the whole time, the cause was my own recent work, and the te
 the wrong thing since the day it was written.
 
 407 backend tests, unchanged — this replaces a test rather than adding one.
+
+## 2026-08-24 — M6 #54: the build did not resolve to the same thing twice
+
+Every backend dependency was declared as a floor — `django>=5.0`, `ruff>=0.6` — so CI resolved the
+tree fresh on every run. A green pull request and a red one an hour later could differ by an upstream
+release nobody here had chosen. #71 had already been exactly that, and its fix (a Django ceiling)
+only closed the one door that had been walked through.
+
+Three symptoms, one cause. CI and a developer machine installed different trees. The lint gates
+disagreed with each other — pre-commit pinned ruff 0.6.9 while CI installed `ruff>=0.6` and got 0.16,
+versions two years apart with different default rulesets. And a fresh clone could not run the
+documented commands at all, because `make test` called a bare `pytest`.
+
+`pip-compile` locks now describe the environment, hash-pinned, and `make bootstrap`, CI and the
+backend image all install from them. **The deciding property for pip-tools over uv was the install
+side, not the resolve side**: a pip-compile lock is a plain requirements file, so nothing new enters
+the image or CI to read it. The resolver runs when a dependency changes; the installer runs on every
+build. Locks are compiled inside `python:3.12-slim` via `make lock` for the same reason — pip-compile
+resolves for the platform it runs on, and a lock compiled on my Mac describes an install this project
+never performs.
+
+**Linter versions now exist in exactly one place.** The ruff and black pre-commit hooks became
+`language: system` hooks running out of `backend/.venv`. A remote hook carries its own `rev:`, and a
+second place to write a version is a second place for it to be wrong — which is precisely how the two
+gates ended up two years apart. `[tool.black] target-version` is stated for the same reason; black
+was otherwise inferring a target from whichever interpreter invoked it, and warning that it could not
+verify its own output.
+
+The interesting test is `test_every_pin_satisfies_what_pyproject_declares`. `pyproject.toml` says what
+is *allowed* and carries the reasoning; the lock says what is *installed*. Nothing connected the two,
+so a lock generated before #71's ceiling was added would have kept installing the broken pair while
+the comment explaining why it must not sat in the next file. That is now a test, and it fails if the
+lock is edited to `django==6.1.0`.
+
+**Freshness is deliberately not checked.** Asserting that `pip-compile` today would reproduce the
+committed file needs the network and goes red whenever any transitive dependency publishes — turning
+"someone else shipped something" into "your pull request is broken", which is the failure this whole
+change exists to remove. The tests check that the lock is *wrong*, never that it is *stale*.
+
+Verified the acceptance criterion literally: a clone into a scratch directory, then `make bootstrap
+&& make test && make lint` green in about 20 seconds for bootstrap. Five mutations, all killed —
+stripped hashes, a pin past the declared ceiling, the two locks drifting apart, a locked ruff the
+venv does not have, and a re-added pinned remote ruff hook. Also confirmed the Docker dependency
+layer now survives a code edit (`CACHED`), which it never did before: the old Dockerfile copied the
+source *before* installing, so the comment promising layer caching had been wrong since #23.
+
+The honest cost is in the ADR: nothing upgrades until someone runs `make lock` and reads the diff, so
+a security release now needs a deliberate act. That is the trade — a stale dependency is a decision,
+where the alternative was an unannounced upgrade in the middle of an unrelated change. Dependabot
+opening `make lock` pull requests is the follow-up.
+
+416 backend tests, up from 407.

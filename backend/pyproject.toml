@@ -28,7 +28,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-django>=4.8", "ruff>=0.6", "black>=24.0"]
+# Floors only. The exact versions live in requirements-dev.lock, which is what `make bootstrap` and
+# CI install from — see ADR-0018. `packaging` is declared rather than inherited from black so that
+# tests/test_toolchain.py does not import a transitive dependency by luck. pip-tools is deliberately
+# absent: `make lock` runs it inside the release image, so shipping it (and the pip/setuptools pins
+# it drags in) to every developer and every CI run would buy nothing.
+dev = ["pytest>=8.0", "pytest-django>=4.8", "ruff>=0.6", "black>=24.0", "packaging>=24.0"]
 
 [tool.ruff]
 line-length = 100
@@ -43,6 +48,11 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.black]
 line-length = 100
+# Stated, not inferred (#54). Black otherwise picks a target from the interpreter running it, so the
+# same file formats differently on two machines and `--check` warns that it cannot verify its own
+# output. 3.12 is the floor `requires-python` declares, which is the version every environment here
+# is guaranteed to have.
+target-version = ["py312"]
 
 [tool.setuptools.packages.find]
 include = ["app*", "config*"]

@@ -38,7 +38,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        # From the lockfile, never from pyproject's floors (#54, ADR-0018): CI is the reference
+        # environment, so if it resolves a different tree than `make bootstrap` builds, a green run
+        # here says nothing about the machine the change was written on. `--no-deps` on the editable
+        # install keeps pip from re-resolving what the lock just pinned.
+        run: |
+          pip install --require-hashes -r requirements-dev.lock
+          pip install --no-deps -e .
       - name: Lint
         run: |
           ruff check .

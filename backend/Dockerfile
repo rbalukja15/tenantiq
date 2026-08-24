@@ -9,14 +9,21 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install dependencies first (their own layer) so code edits don't re-resolve the whole tree.
-# The runtime deps live in pyproject; psycopg[binary] and cryptography ship wheels, so no compiler
-# toolchain is needed on slim.
+# Dependencies first, from the lockfile and nothing else (#54, ADR-0018). Two things follow from
+# installing the lock before the source is copied: the image resolves the exact versions CI tested
+# rather than whatever PyPI published this morning, and a code edit no longer invalidates the
+# dependency layer. `--require-hashes` makes a tampered or substituted artefact a build failure.
+# psycopg[binary] and cryptography ship wheels, so slim needs no compiler toolchain.
+COPY requirements.lock ./
+RUN pip install --require-hashes -r requirements.lock
+
+# The package itself, without deps: they are already installed above, and letting pip re-resolve
+# from pyproject's floors here would reintroduce exactly the floating install the lock removes.
 COPY pyproject.toml ./
 COPY app ./app
 COPY config ./config
 COPY manage.py ./
-RUN pip install -e .
+RUN pip install --no-deps -e .
 
 EXPOSE 8000
 

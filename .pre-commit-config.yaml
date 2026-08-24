@@ -1,16 +1,33 @@
-# Install: pip install pre-commit && pre-commit install
+# Install: make bootstrap  (required — the linter hooks run out of backend/.venv)
+#          pipx install pre-commit && pre-commit install
 # Run on all files: pre-commit run --all-files
+#
+# ruff and black are `local` / `language: system` hooks on purpose (#54, ADR-0018). A remote hook
+# carries its own `rev:`, which is a second place a linter version is written and therefore a second
+# place it can be wrong — this file pinned ruff 0.6.9 while CI installed `ruff>=0.6` and resolved
+# 0.16, whose default ruleset differs. These hooks run the binaries `make bootstrap` installed from
+# backend/requirements-dev.lock, so the lock is the only version that exists.
+# tests/test_toolchain.py fails if a pinned remote ruff/black hook is ever reintroduced.
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+  - repo: local
     hooks:
       - id: ruff
+        name: ruff (backend/.venv)
+        entry: backend/.venv/bin/ruff
+        args: [check, --force-exclude]
+        language: system
+        types_or: [python, pyi]
         files: ^backend/
-  - repo: https://github.com/psf/black
-    rev: 24.10.0
-    hooks:
       - id: black
+        name: black (backend/.venv)
+        entry: backend/.venv/bin/black
+        args: [--quiet]
+        language: system
+        types_or: [python, pyi]
         files: ^backend/
+
+  # Hygiene only — nothing here decides whether code passes lint, so an independent pin costs
+  # nothing and keeps these working before the venv exists.
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
