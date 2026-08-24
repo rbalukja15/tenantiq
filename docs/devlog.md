@@ -1403,3 +1403,51 @@ where the alternative was an unannounced upgrade in the middle of an unrelated c
 opening `make lock` pull requests is the follow-up.
 
 416 backend tests, up from 407.
+
+## 2026-08-24 — M6 #86: the suite could not see any of these
+
+Four bugs have now shared one shape: **the code was correct, the suite was green, and the running
+system did not work.** #79 made sign-in impossible. #81 redirected to `http://0.0.0.0:3000/` after a
+successful login. #84 greeted a person with their `<sub>.<issuer-hash>` identity key. Three of the
+four were found by a human opening the app. The suite could not see any of them, and not by accident:
+token verification is injectable and every test signs its own token, so nothing ever fetched a real
+discovery document, ran against a server bound to a different host than the browser uses, or read a
+claim it had not itself just written.
+
+`scripts/smoke-auth.sh` drives a complete authorization-code flow with PKCE against the local
+Keycloak and then the authenticated product path — upload through the BFF, wait for `ready`, ask a
+question, resolve every citation, delete. It asserts the things that **actually broke**, not status
+codes: the authorize URL belongs to the real IdP and carries `S256`; the post-callback `Location` is
+*exactly* `APP_BASE_URL`; `/api/me` returns a readable `display_name` that is not the identity key;
+an upload without `x-csrf-token` is refused 403.
+
+**The scope I did not expect to need was the realm itself.** `docs/auth-keycloak.md` described five
+manual admin-console steps — fine to read, impossible to automate, and the reason nothing had ever
+exercised this path. `scripts/dev-realm.sh` does those five steps through the admin REST API,
+idempotently, so `make smoke-auth` is one command against a running stack. The five sections stay in
+the document, because the reasoning is the valuable half and there is no `dev-realm.sh` in a real
+deployment.
+
+Verified by reverting, which is the only thing that makes a regression test worth having:
+
+- revert #81 → **fails at step 4**, `expected http://localhost:3000/, actual http://0.0.0.0:3000/`;
+- revert #84 → **fails at step 5**, `display_name is empty`;
+- disable the fixture user → **fails at step 3**, so the flow genuinely depends on authenticating.
+
+Two things the first draft got wrong, both caught by running it rather than reading it. It cleaned up
+its document only on the **success** path, so a failed run left a near-identical file behind and the
+next run's citation assertion resolved to the *previous* run's upload — cleanup is now on every exit
+path. And it asserted that **every** citation belonged to its own upload, which is wrong against a
+real tenant that legitimately holds other documents; it now asserts every citation resolves to a real
+chunk and at least one is from this run's file. A third bug was worse in kind: a `$(...)` around the
+SSE parser swallowed a traceback, so a broken parser reported itself as *"the query refused —
+retrieval found no evidence"*. A test that lies about why it failed is worse than one that fails.
+
+**It is deliberately not in CI**, and that is written down rather than implied. CI would need a
+Keycloak service plus a realm import — real infrastructure that belongs with #24/#25 — and a smoke
+test that is slow or flaky in CI gets muted, which is worse than not having it. The unit suite stays
+hermetic and this covers what a hermetic suite structurally cannot. Its blind spot is stated too: a
+regression in *rendering* would slip past, because this is HTTP-level by design.
+
+No new unit tests — the artifact is a script, and its test is the revert-check above. 416 backend
+tests unchanged.

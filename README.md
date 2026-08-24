@@ -66,10 +66,16 @@ make lint       # ruff + black + eslint
 ```bash
 make dev      # full stack via Docker Compose: Postgres(pgvector) + Redis + Ollama + backend + Celery worker + frontend
 make smoke    # push a sample doc through the running stack and wait for READY (real worker + embedder)
+make dev-realm   # provision the local Keycloak realm + Tenant row so sign-in works (idempotent)
+make smoke-auth  # drive a real sign-in end to end, then upload, ask, cite and delete
 make eval     # retrieval metrics against the curated dataset (seconds)
 make eval-faithfulness  # also generates and judges an answer per question (minutes)
 make lock     # recompile backend/requirements*.lock after editing pyproject dependencies
 ```
+
+`make smoke-auth` is the one check that exercises the *authenticated* path against the running
+system — a real OIDC authorization-code flow, not a signed test token. It is local-only and the
+reasoning is in [docs/auth-keycloak.md](docs/auth-keycloak.md).
 
 `make dev` is the exception that needs **only** Docker — it builds the backend image from the same
 lockfile, so the stack comes up whether or not you have bootstrapped. `make dev` seeds `.env` from

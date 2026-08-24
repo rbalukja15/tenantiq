@@ -8,6 +8,21 @@ from the verified `iss` claim. See [ADR-0002](adr/0002-tenant-isolation.md).
 > Tests don't need any of this — token verification is injectable and CI signs tokens with a
 > local test key (no live Keycloak). This is only for running the real flow locally.
 
+## The short version
+
+```bash
+echo "127.0.0.1 keycloak" | sudo tee -a /etc/hosts   # once per machine, see §1 for why
+docker compose --profile dev up -d keycloak          # `make dev` alone does not start it
+make dev-realm                                       # realm + client + mapper + user + Tenant row
+make smoke-auth                                      # prove the whole flow actually works
+```
+
+`make dev-realm` ([`scripts/dev-realm.sh`](../scripts/dev-realm.sh)) performs sections 2–5 below
+through Keycloak's admin REST API and is safe to re-run: every object is created only if absent, and
+the fixture user's password is always reset so a half-finished run cannot leave you stuck. Sections
+1–5 remain because **the reasoning is the valuable part** — each explains a constraint that will bite
+again in a real deployment, where there is no `dev-realm.sh`.
+
 ## 1. Point `keycloak` at your machine, then start it
 
 The issuer stored on a tenant has to be **one string that means the same Keycloak from three
@@ -89,3 +104,53 @@ Tenant.objects.create(
 
 A token from this realm now resolves to the `acme` tenant; expired / wrong-issuer /
 wrong-audience tokens are rejected with 401.
+
+## Verifying it end to end (`make smoke-auth`)
+
+`make dev-realm` makes sign-in *possible*. [`scripts/smoke-auth.sh`](../scripts/smoke-auth.sh)
+proves it *works*, by driving a complete authorization-code flow with PKCE against this Keycloak and
+then exercising the authenticated product path — upload through the BFF, wait for `ready`, ask a
+question, resolve every citation, delete.
+
+It exists because four bugs have now shared one shape: **the code was correct, the suite was green,
+and the running system did not work.**
+
+| Issue | What broke                                                    | Why the suite could not see it                                              |
+| ----- | ------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| #79   | Sign-in impossible — the guard refused the documented issuer   | Verification is injectable; the suite signs its own tokens and fetches no real discovery document |
+| #81   | Sign-in succeeded, then redirected to `http://0.0.0.0:3000`    | No test runs against a server bound to a different host than the browser uses |
+| #84   | The shell greeted a person with their `<sub>.<issuer-hash>` key | Every test asserts on the claim value it just inserted itself                |
+
+Three of the four were found by a human opening the app. So the assertions are on **the things that
+actually broke**, not on status codes: the authorize URL belongs to the real IdP and carries PKCE
+`S256`; the post-callback `Location` is *exactly* `APP_BASE_URL`; `/api/me` returns a readable
+`display_name` that is not the identity key; an upload without `x-csrf-token` is refused 403; every
+cited chunk resolves to a real chunk and at least one belongs to the document just uploaded.
+
+Reverting #81 makes it fail with `expected http://localhost:3000/, actual http://0.0.0.0:3000/`.
+Reverting #84 makes it fail with `display_name is empty`. Both are checked, not assumed.
+
+### When to run it
+
+**Local-only, before every release — and after any change to auth, the BFF proxy, cookies or
+compose's environment wiring.** It is deliberately *not* in CI.
+
+That is a decision rather than an omission. CI would need a Keycloak service plus a realm import,
+which is real infrastructure that belongs with the deployment work in #24/#25 — and a smoke test that
+is flaky or slow in CI gets muted, at which point it is worse than not having it. The unit suite
+stays hermetic (no live Keycloak, tokens signed with a local key) and this covers what a hermetic
+suite structurally cannot. Revisit when #25 has an environment to run it against.
+
+### Notes
+
+- It runs against a **real** tenant, which may already contain documents. It therefore asserts that
+  *at least one* cited chunk is from its own upload, not that all of them are.
+- It cleans up its document on every exit path, including failure. An early draft cleaned up only on
+  success, and the leftovers made the next run cite the previous run's file.
+- The credentials are dev fixtures created by `dev-realm.sh` for a throwaway local IdP. They
+  authenticate nothing anywhere else.
+- It is deliberately **not** a browser-driving test. Every bug above was HTTP-level — redirect
+  targets, headers, cookie scope, response bodies — and a headless browser would add flake and CI
+  weight without covering anything extra. Its blind spot is honest and worth stating: a regression in
+  *rendering* (say, the shell rendering `username` again while the API still returns `display_name`)
+  is exactly what it would miss. Revisit if a bug turns out to be genuinely browser-only.
