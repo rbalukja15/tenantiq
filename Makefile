@@ -49,6 +49,12 @@ dev: ## Run the full stack locally (compose: db, redis, ollama, backend, worker,
 smoke: ## Ingest a sample doc through the running stack and wait for READY (real worker + embedder)
 	docker compose exec backend python manage.py smoke_ingest
 
+dev-realm: ## Provision the local Keycloak realm, client and Tenant row so sign-in works (idempotent)
+	./scripts/dev-realm.sh
+
+smoke-auth: ## Drive a real sign-in end to end against the running stack, then upload/query/delete (#86)
+	./scripts/smoke-auth.sh
+
 test: $(VENV_BIN)/pytest ## Run backend (pytest) and frontend (vitest) tests
 	cd backend && $(VENV_BIN)/pytest -q
 	cd frontend && npm test --if-present
@@ -73,4 +79,4 @@ eval-faithfulness: ## Also generate + judge an answer per question (#22). Two mo
 $(VENV_BIN)/pytest $(VENV_BIN)/ruff:
 	@echo "error: the backend venv is missing or incomplete — run 'make bootstrap'" >&2; exit 1
 
-.PHONY: help bootstrap lock dev smoke test lint eval eval-faithfulness
+.PHONY: help bootstrap lock dev smoke dev-realm smoke-auth test lint eval eval-faithfulness
