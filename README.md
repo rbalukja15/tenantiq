@@ -55,16 +55,31 @@ See [`docs/architecture.md`](docs/architecture.md) for the full breakdown and [`
 
 ## Run locally
 
+Needs Docker, Python 3.12+ and Node 22+ (`.nvmrc` pins the line; `nvm use` reads it).
+
+```bash
+make bootstrap  # once per clone: backend venv from the lockfile + frontend `npm ci`
+make test       # pytest + vitest
+make lint       # ruff + black + eslint
+```
+
 ```bash
 make dev      # full stack via Docker Compose: Postgres(pgvector) + Redis + Ollama + backend + Celery worker + frontend
 make smoke    # push a sample doc through the running stack and wait for READY (real worker + embedder)
-make test     # pytest + vitest
-make lint     # ruff + black + eslint
 make eval     # retrieval metrics against the curated dataset (seconds)
 make eval-faithfulness  # also generates and judges an answer per question (minutes)
+make lock     # recompile backend/requirements*.lock after editing pyproject dependencies
 ```
 
-`make dev` seeds `.env` from `.env.example` on first run and needs only Docker. A fresh clone comes up on Postgres with row-level security enforced — never silently on SQLite.
+`make dev` is the exception that needs **only** Docker — it builds the backend image from the same
+lockfile, so the stack comes up whether or not you have bootstrapped. `make dev` seeds `.env` from
+`.env.example` on first run, and a fresh clone comes up on Postgres with row-level security enforced
+— never silently on SQLite.
+
+Every host-side command runs out of `backend/.venv`, which `make bootstrap` installs from
+`backend/requirements-dev.lock` — the same file CI installs from, so a green run on your machine and
+a green run in CI mean the same thing (ADR-0018). Running `make test` before bootstrapping fails
+with that instruction rather than with `pytest: command not found`.
 
 ## Roadmap
 
@@ -99,6 +114,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0015 — Document deletion & citation resolution](docs/adr/0015-document-deletion-and-citation-resolution.md)
 - [ADR-0016 — Rendering a streamed, cited answer](docs/adr/0016-rendering-a-streamed-cited-answer.md)
 - [ADR-0017 — Managing a corpus from the browser](docs/adr/0017-document-management-ui.md)
+- [ADR-0018 — A build that resolves to the same thing twice](docs/adr/0018-reproducible-toolchain.md)
 
 ## License
 
