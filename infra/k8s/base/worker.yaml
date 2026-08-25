@@ -1,0 +1,57 @@
+# The Celery ingestion worker (#24, ADR-0019). Same image as the API, different command — one image,
+# two roles, exactly as compose runs it.
+#
+# It mounts the same media volume because it reads the files the API wrote. That shared mount is the
+# reason `tenantiq-media` must be ReadWriteMany; see media-pvc.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-worker
+  labels:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenantiq
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenantiq
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: tenantiq
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: worker
+          image: tenantiq/backend:dev
+          command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+          envFrom:
+            - configMapRef:
+                name: tenantiq-config
+            - secretRef:
+                name: tenantiq-secrets
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
+          # No probes on purpose. A Celery worker exposes no port, and `celery inspect ping` as an
+          # exec probe costs a broker round trip every period and reports the *broker* as much as the
+          # worker. The ingestion retry model (#13, ADR-0005) is what recovers stuck work; a liveness
+          # probe that killed a pod mid-task would fight it.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: tenantiq-media

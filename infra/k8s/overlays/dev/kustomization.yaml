@@ -1,0 +1,60 @@
+# Dev overlay: a self-contained stack for a single-node cluster (kind, minikube, Docker Desktop).
+#
+#   kubectl kustomize infra/k8s/overlays/dev        # render
+#   make k8s-dev | kubectl apply -f -               # apply (see docs/deployment.md for the ordering)
+#
+# It runs its own Postgres, Redis and Ollama, mirroring `docker compose up`. Prod runs none of them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tenantiq-dev
+
+resources:
+  - ../../base
+  # The bootstrap SQL, generated from infra/postgres/init/*.sql — the same bytes compose mounts.
+  # Kustomize cannot read a file outside its own root, but it can include another kustomization
+  # directory, which is why that directory has one. A copy here would be a third rendition of SQL
+  # that already exists twice.
+  - ../../../postgres
+  - namespace.yaml
+  - datastores.yaml
+  - ollama.yaml
+
+patches:
+  - path: patch-media-rwo.yaml
+
+configMapGenerator:
+  # `behavior: merge` overrides individual keys and leaves the other 27 alone. Replacing the whole
+  # ConfigMap would silently drop every tunable the overlay did not think to restate — the same class
+  # of bug as compose forwarding nine variables out of thirty-five.
+  - name: tenantiq-config
+    behavior: merge
+    literals:
+      - DJANGO_DEBUG=true
+      - DJANGO_ALLOWED_HOSTS=tenantiq-backend,tenantiq-backend.svc.cluster.local,localhost,127.0.0.1
+      - REDIS_URL=redis://tenantiq-redis:6379/0
+      - OLLAMA_BASE_URL=http://tenantiq-ollama:11434
+  - name: tenantiq-frontend-config
+    literals:
+      # The app's own public origin as the BROWSER sees it — the OIDC redirect_uri and the Origin
+      # every state-changing request must equal. With no Ingress in dev this is a port-forward:
+      #   kubectl -n tenantiq-dev port-forward svc/tenantiq-frontend 3000:3000
+      - APP_BASE_URL=http://localhost:3000
+      # Dev-only (#79): permits a plain-http OIDC issuer on a non-loopback host. The guard refuses an
+      # http issuer regardless once APP_BASE_URL is https, so this cannot downgrade a real deployment.
+      - OIDC_ALLOW_INSECURE_ISSUER=1
+
+secretGenerator:
+  # Dev-only literals, and they are meant to be recognisably fake. Production creates its Secret out
+  # of band — see the prod overlay, which generates nothing and references the name directly.
+  - name: tenantiq-secrets
+    literals:
+      - DATABASE_URL=postgresql://tenantiq_app:tenantiq_app@tenantiq-postgres:5432/tenantiq
+      - DJANGO_SECRET_KEY=dev-insecure-not-a-real-key
+      - ANTHROPIC_API_KEY=
+
+images:
+  - name: tenantiq/backend
+    newTag: dev
+  - name: tenantiq/frontend
+    newTag: dev

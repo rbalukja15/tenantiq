@@ -1,0 +1,22 @@
+# The Postgres bootstrap, consumable two ways from one copy (#24, ADR-0019).
+#
+# `init/*.sql` is mounted straight into /docker-entrypoint-initdb.d by docker-compose. Kustomize
+# cannot read a file outside its own root, but it CAN include another kustomization directory — so
+# this exists to make the same two files reachable from infra/k8s/overlays/dev without a second copy.
+#
+# CI holds a third rendition of this SQL as inline Python (.github/workflows/ci.yml), because a
+# GitHub Actions service container has no init hook. That one is a real duplication and is called out
+# in ADR-0019; this indirection at least keeps compose and Kubernetes on the same bytes.
+#
+# Dev only. It creates a role with a well-known password and must never be included by a prod overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+configMapGenerator:
+  - name: tenantiq-postgres-init
+    files:
+      - init/10-app-role.sql
+      - init/20-vector-extension.sql
+    options:
+      labels:
+        app.kubernetes.io/part-of: tenantiq

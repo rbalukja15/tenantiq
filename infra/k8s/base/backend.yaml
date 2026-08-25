@@ -1,0 +1,87 @@
+# The Django API (#24, ADR-0019). Never exposed publicly: the BFF is the only thing that talks to it
+# (ADR-0013 §1), so this Service is ClusterIP and no Ingress routes to it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-backend
+  labels:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenantiq
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenantiq
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: tenantiq
+    spec:
+      securityContext:
+        # Verified against the image rather than asserted: `docker run --user 1000:1000` runs
+        # `manage.py check` clean. fsGroup is what makes the media volume writable to that uid.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: backend
+          image: tenantiq/backend:dev # overlays set the real tag via the `images` transformer
+          command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: tenantiq-config
+            - secretRef:
+                name: tenantiq-secrets
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
+          # TCP, not HTTP, and that is a known weakness: the API has no health endpoint, so this
+          # proves the socket is open and nothing about whether Django can reach Postgres. A pod
+          # whose database is unreachable will therefore be marked Ready and serve 500s. Fixing it
+          # means adding /healthz to the backend, which is application work rather than #24's.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: tenantiq-media
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenantiq-backend
+  labels:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

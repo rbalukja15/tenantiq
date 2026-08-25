@@ -1,0 +1,65 @@
+# Prod overlay: the application only.
+#
+#   kubectl kustomize infra/k8s/overlays/prod
+#
+# It runs no Postgres, no Redis and no Ollama. Managed Postgres (with pgvector available and a
+# NOSUPERUSER, NOBYPASSRLS role — ADR-0002 requires both) and managed Redis are the deployment's
+# responsibility, and their addresses arrive in the Secret.
+#
+# It also GENERATES NO SECRET. `tenantiq-secrets` is created out of band, which is why the name here
+# has no content hash: a generated Secret would either live in git or be a fiction. Create it with:
+#
+#   kubectl -n tenantiq create secret generic tenantiq-secrets \
+#     --from-literal=DATABASE_URL='postgresql://USER:PASS@HOST:5432/tenantiq' \
+#     --from-literal=DJANGO_SECRET_KEY="$(openssl rand -base64 48)" \
+#     --from-literal=ANTHROPIC_API_KEY='...'
+#
+# ...or from a secrets manager via External Secrets / Sealed Secrets. The trade-off of the unhashed
+# name is real and worth stating: rotating the Secret does NOT roll the pods, so a rotation has to be
+# followed by `kubectl rollout restart`. docs/deployment.md says so where someone will read it.
+#
+# UNFINISHED, deliberately, and both are named rather than implied:
+#   - the image this deploys as `frontend` is built from frontend/Dockerfile, whose CMD is
+#     `next dev`. A production image (`next build` + standalone output) belongs with #25.
+#   - TENANTIQ_LLM_FACTORY / TENANTIQ_EMBEDDER_FACTORY still default to the local Ollama backends,
+#     which do not exist in this namespace. #53 owns that decision; until it lands, this overlay
+#     renders correctly and would not answer a question.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tenantiq
+
+resources:
+  - ../../base
+  - namespace.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+
+patches:
+  # One document per entry: kustomize's PatchTransformer parses a single patch per path, so a
+  # multi-document file fails to build rather than applying the first one silently.
+  - path: patch-frontend-replicas.yaml
+  - path: patch-backend-replicas.yaml
+  - path: patch-worker-replicas.yaml
+
+configMapGenerator:
+  - name: tenantiq-config
+    behavior: merge
+    literals:
+      - DJANGO_DEBUG=false
+      - DJANGO_ALLOWED_HOSTS=tenantiq-backend,tenantiq-backend.svc.cluster.local
+      # Managed Redis; the host comes from the deployment, not from a Service in this namespace.
+      - REDIS_URL=redis://tenantiq-redis.example.internal:6379/0
+      # #88: 0.0 refuses nothing, so the product answers every question whether or not the corpus
+      # can. Left at the base default on purpose — the defensible value depends on the embedder #53
+      # chooses, and guessing one here would look like a decision that has not been made.
+      - TENANTIQ_RETRIEVAL_MIN_SIMILARITY=0.0
+  - name: tenantiq-frontend-config
+    literals:
+      - APP_BASE_URL=https://tenantiq.example.com
+
+images:
+  - name: tenantiq/backend
+    newTag: latest # the pipeline (#25) replaces this with the released digest
+  - name: tenantiq/frontend
+    newTag: latest

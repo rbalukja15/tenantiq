@@ -14,8 +14,11 @@ NODE_MAJOR := 22
 LOCK_IMAGE         := python:3.12-slim
 PIP_COMPILE_FLAGS  := --quiet --strip-extras --allow-unsafe --generate-hashes
 
+# The digit in the character class below is load-bearing: without it `k8s-dev` and `k8s-prod` exist,
+# work, and are invisible here — a target nobody can discover is a target nobody runs. The comment
+# lives outside the recipe because make echoes recipe lines, comments included.
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 bootstrap: ## Install backend (venv, from the lockfile) + frontend deps — run this first on a fresh clone
 	@$(PYTHON) -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null || { \
@@ -63,6 +66,12 @@ lint: $(VENV_BIN)/ruff ## Lint backend and frontend
 	cd backend && $(VENV_BIN)/ruff check . && $(VENV_BIN)/black --check .
 	cd frontend && npm run lint
 
+k8s-dev: ## Render the dev Kubernetes overlay to stdout (pipe it: make k8s-dev | kubectl apply -f -)
+	@kubectl kustomize infra/k8s/overlays/dev
+
+k8s-prod: ## Render the prod Kubernetes overlay to stdout (see docs/deployment.md for the ordering)
+	@kubectl kustomize infra/k8s/overlays/prod
+
 eval: ## Measure retrieval quality against the curated dataset (real embedder, in the running stack)
 	# Inside the stack on purpose: retrieval numbers are only meaningful against the real embedder,
 	# and on the host TENANTIQ_EMBEDDER_FACTORY points at an Ollama that is usually not reachable.
@@ -79,4 +88,4 @@ eval-faithfulness: ## Also generate + judge an answer per question (#22). Two mo
 $(VENV_BIN)/pytest $(VENV_BIN)/ruff:
 	@echo "error: the backend venv is missing or incomplete — run 'make bootstrap'" >&2; exit 1
 
-.PHONY: help bootstrap lock dev smoke dev-realm smoke-auth test lint eval eval-faithfulness
+.PHONY: help bootstrap lock dev smoke dev-realm smoke-auth k8s-dev k8s-prod test lint eval eval-faithfulness

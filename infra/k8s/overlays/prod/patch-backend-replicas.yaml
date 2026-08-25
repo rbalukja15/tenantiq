@@ -1,0 +1,16 @@
+# ONE replica, for a storage reason rather than a session one.
+#
+# The API writes uploads to a volume the worker reads, so `tenantiq-media` is ReadWriteMany. Even
+# where the storage class provides it, adding API replicas multiplies writers on a single shared
+# filesystem. The fix is object storage for uploads, not a bigger number.
+#
+# `Recreate` because a RollingUpdate would need the new pod to mount the same claim while the old one
+# still holds it — which the common ReadWriteOnce fallback cannot do, leaving the rollout stuck.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate

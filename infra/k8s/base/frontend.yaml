@@ -1,0 +1,83 @@
+# The Next.js BFF (#24, ADR-0019). This is the ONLY component an Ingress routes to: the browser holds
+# no token and never calls Django directly (ADR-0013 §1).
+#
+# WARNING, stated rather than buried: `frontend/Dockerfile` builds a **dev-server** image — its CMD is
+# `next dev`. These manifests deploy whatever image they are given, so the prod overlay is only
+# production-grade once a production image exists (`next build` + `next start`, standalone output).
+# That image belongs with the deploy pipeline in #25 and is not invented here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-frontend
+  labels:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenantiq
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenantiq
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: tenantiq
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: frontend
+          image: tenantiq/frontend:dev
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # In-network address of the API. Deliberately not NEXT_PUBLIC_: that would be inlined
+            # into the browser bundle, and the browser must never learn where Django is.
+            - name: API_BASE_URL
+              value: http://tenantiq-backend:8000
+          envFrom:
+            # Carries APP_BASE_URL — the app's own public origin, which every overlay must set
+            # because it is both the OIDC redirect_uri and the Origin state-changing requests must
+            # match. There is no sane default, so it is per-overlay rather than in base.
+            - configMapRef:
+                name: tenantiq-frontend-config
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenantiq-frontend
+  labels:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

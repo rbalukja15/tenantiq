@@ -1,0 +1,103 @@
+# The local embedding + fallback generation backend (ADR-0004), dev only.
+#
+# Production does not run this: #53 owns the hosted provider decision, and a CPU-bound Ollama is not
+# a production answer for either embeddings or generation. Its presence here is what makes a dev
+# cluster able to ingest a document at all.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenantiq-ollama
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama }
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-ollama
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama }
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: the model volume is ReadWriteOnce, so a second pod cannot mount it
+    # while the first still holds it, and the rollout would deadlock waiting for a pod that cannot
+    # schedule. The same reasoning applies to every RWO-backed workload in this directory.
+    type: Recreate
+  selector:
+    matchLabels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama }
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama
+          ports:
+            - name: http
+              containerPort: 11434
+          volumeMounts:
+            - { name: models, mountPath: /root/.ollama }
+          readinessProbe:
+            exec: { command: ["ollama", "list"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 500m, memory: 2Gi }
+            # Generation on CPU is memory-hungry; llama3.1 at 8k context does not fit in less.
+            limits: { memory: 8Gi }
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: tenantiq-ollama-models
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tenantiq-ollama-models
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+# Pulls the embedding model into the volume, mirroring compose's one-shot `ollama-pull` service.
+# It waits rather than assuming: `ollama pull` needs a running server, and a Job that starts before
+# the Deployment is Ready would fail and burn its backoff.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tenantiq-ollama-pull
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama-pull }
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: ollama-pull }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: pull
+          image: ollama/ollama
+          env:
+            - { name: OLLAMA_HOST, value: "tenantiq-ollama:11434" }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until ollama list >/dev/null 2>&1; do
+                echo "waiting for tenantiq-ollama..."
+                sleep 3
+              done
+              ollama pull "${TENANTIQ_EMBEDDING_MODEL}"
+          envFrom:
+            - configMapRef:
+                name: tenantiq-config
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }

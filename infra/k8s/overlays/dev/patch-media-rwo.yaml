@@ -1,0 +1,12 @@
+# A single-node dev cluster (kind, minikube, Docker Desktop) has only a ReadWriteOnce provisioner, so
+# the base claim's ReadWriteMany would stay Pending forever and nothing would start.
+#
+# This works only because every pod that mounts it lands on the same node — Kubernetes permits
+# multiple pods to share an RWO volume when they are co-scheduled. It is not a fix for the underlying
+# constraint, which is that the API and the worker share a filesystem at all; see ADR-0019.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tenantiq-media
+spec:
+  accessModes: ["ReadWriteOnce"]

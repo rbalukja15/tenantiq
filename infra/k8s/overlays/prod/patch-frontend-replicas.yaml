@@ -1,0 +1,17 @@
+# ONE replica, and not a placeholder to raise later.
+#
+# `frontend/lib/session.ts` keeps sessions in an in-process Map on globalThis. A second replica has a
+# different Map, so a request the load balancer sends there finds no session and answers 401 — the
+# user is silently signed out, intermittently, depending on which pod they land on. The fix is a
+# shared session store (Redis), not a bigger number.
+#
+# `Recreate` follows from the same fact: a rolling update runs two pods at once and flaps users
+# between them, which is worse than one clean restart after which everyone signs in again.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-frontend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate

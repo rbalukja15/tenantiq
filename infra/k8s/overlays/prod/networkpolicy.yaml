@@ -1,0 +1,26 @@
+# Encodes the invariant the architecture already claims: nothing but the BFF talks to Django
+# (ADR-0013 §1). Without this the claim holds only because no other pod happens to try.
+#
+# Note what it does NOT do: this is ingress-only. Egress from the backend is unrestricted because it
+# must reach the database, Redis and a hosted model provider, and enumerating those belongs with #53.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tenantiq-backend-ingress
+  labels:
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tenantiq
+      app.kubernetes.io/component: backend
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tenantiq
+              app.kubernetes.io/component: frontend
+      ports:
+        - protocol: TCP
+          port: 8000

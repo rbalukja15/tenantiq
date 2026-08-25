@@ -1,0 +1,49 @@
+# Schema migrations, run once per release before the API and worker roll (#24, ADR-0019).
+#
+# Not an initContainer, which is the tempting shortcut: an initContainer runs in EVERY replica, so
+# scaling the API to N pods runs N concurrent `migrate` commands against one database.
+#
+# A Job has its own sharp edge and it is worth naming: `kubectl apply` has no ordering primitive and
+# a completed Job's `spec` is immutable, so re-applying this at the next release fails rather than
+# re-running. The deploy flow therefore deletes it first and waits for completion before rolling the
+# Deployments — that sequencing lives in docs/deployment.md and becomes the pipeline's job in #25.
+# Kustomize alone cannot express "run this, then that"; pretending otherwise is how a deploy ships an
+# unmigrated schema.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tenantiq-migrate
+  labels:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: migrate
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenantiq
+        app.kubernetes.io/component: migrate
+        app.kubernetes.io/part-of: tenantiq
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: migrate
+          image: tenantiq/backend:dev
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef:
+                name: tenantiq-config
+            - secretRef:
+                name: tenantiq-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi

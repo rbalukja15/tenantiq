@@ -71,6 +71,7 @@ make smoke-auth  # drive a real sign-in end to end, then upload, ask, cite and d
 make eval     # retrieval metrics against the curated dataset (seconds)
 make eval-faithfulness  # also generates and judges an answer per question (minutes)
 make lock     # recompile backend/requirements*.lock after editing pyproject dependencies
+make k8s-dev  # render the dev Kubernetes overlay (see docs/deployment.md)
 ```
 
 `make smoke-auth` is the one check that exercises the *authenticated* path against the running
@@ -121,6 +122,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0016 — Rendering a streamed, cited answer](docs/adr/0016-rendering-a-streamed-cited-answer.md)
 - [ADR-0017 — Managing a corpus from the browser](docs/adr/0017-document-management-ui.md)
 - [ADR-0018 — A build that resolves to the same thing twice](docs/adr/0018-reproducible-toolchain.md)
+- [ADR-0019 — Deploying with Kustomize](docs/adr/0019-kubernetes-deployment.md)
 
 ## License
 
