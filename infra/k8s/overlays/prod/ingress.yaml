@@ -1,0 +1,39 @@
+# The ONLY thing exposed publicly is the BFF (ADR-0013 §1). There is deliberately no rule routing to
+# tenantiq-backend: the browser holds no token, and an Ingress to Django would let a caller skip the
+# proxy that attaches one — and with it the CSRF gate, the path allowlist and the header allowlists.
+#
+# TLS is terminated here rather than in Django, which is why `manage.py check --deploy` warnings
+# W004 (HSTS) and W008 (SSL redirect) are answered at this layer. The annotations below assume
+# ingress-nginx and cert-manager; swap them for whatever the target cluster runs.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tenantiq
+  labels:
+    app.kubernetes.io/part-of: tenantiq
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Answers are streamed over SSE (#48, ADR-0009). Default proxy buffering holds the response until
+    # it completes, which turns a token-by-token stream into one silent pause and then a wall of text.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    # Uploads are capped at TENANTIQ_MAX_UPLOAD_BYTES (25 MiB); a smaller proxy limit would reject
+    # them with a 413 the application never sees and cannot explain.
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["tenantiq.example.com"]
+      secretName: tenantiq-tls
+  rules:
+    - host: tenantiq.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tenantiq-frontend
+                port:
+                  name: http

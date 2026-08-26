@@ -1,0 +1,25 @@
+# Base: what every environment runs.
+#
+# Deliberately incomplete on its own. It references a Secret it does not contain and a frontend
+# ConfigMap it does not define, so this builds but `kubectl apply` of it alone would not run. An
+# environment is assembled by an overlay — that is the point of having them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - media-pvc.yaml
+  - migrate-job.yaml
+  - backend.yaml
+  - worker.yaml
+  - frontend.yaml
+
+configMapGenerator:
+  # Generated rather than a plain resource so the name carries a content hash and kustomize rewrites
+  # every reference to it. Editing a plain ConfigMap leaves running pods on the old values until
+  # something unrelated restarts them; a new name is a new pod spec, so the Deployments actually roll.
+  - name: tenantiq-config
+    envs:
+      - config/backend.env
+    options:
+      labels:
+        app.kubernetes.io/part-of: tenantiq

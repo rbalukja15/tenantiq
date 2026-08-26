@@ -1,0 +1,9 @@
+# The worker holds no session and serves no traffic, so it is the one component that scales: it reads
+# the media volume alongside the API and is where ingestion throughput actually lives. Two is safe on
+# ReadWriteMany and is the honest starting point — raise it with the queue depth, not by guessing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-worker
+spec:
+  replicas: 2

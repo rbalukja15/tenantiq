@@ -1,0 +1,18 @@
+# Uploaded files, shared between the API (which writes them) and the worker (which reads them).
+#
+# ReadWriteMany is not a preference — it is what the architecture currently requires, because both
+# Deployments mount the same files. That is the single biggest constraint in this directory, and
+# ADR-0019 states the consequence plainly: most cloud block storage is ReadWriteOnce, so until
+# uploads move to object storage the API cannot be scaled across nodes. The prod overlay pins
+# replicas to 1 for exactly this reason rather than shipping a replica count that cannot schedule.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tenantiq-media
+  labels:
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 10Gi

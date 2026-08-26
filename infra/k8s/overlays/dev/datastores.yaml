@@ -1,0 +1,111 @@
+# Dev-only datastores (#24, ADR-0019). The prod overlay does NOT include this file: production runs
+# managed Postgres and Redis, and their addresses arrive in the Secret.
+#
+# Postgres is a StatefulSet rather than a Deployment because it owns a volume whose identity matters:
+# a Deployment would happily start a second pod against the same claim during a rolling update.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenantiq-postgres
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: postgres }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: postgres }
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tenantiq-postgres
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: postgres }
+spec:
+  serviceName: tenantiq-postgres
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: postgres }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: postgres }
+    spec:
+      securityContext:
+        fsGroup: 999 # the postgres uid in the official image, which this one is built on
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - { name: POSTGRES_USER, value: tenantiq }
+            - { name: POSTGRES_PASSWORD, value: tenantiq }
+            - { name: POSTGRES_DB, value: tenantiq }
+            # The image refuses to initdb into a non-empty mount, and a PVC arrives with lost+found.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          volumeMounts:
+            - { name: pgdata, mountPath: /var/lib/postgresql/data }
+            # Creates the non-superuser tenantiq_app role and pgvector on FIRST init only, exactly as
+            # compose does — same two files, via the kustomization in infra/postgres.
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "tenantiq"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: init
+          configMap:
+            name: tenantiq-postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenantiq-redis
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: redis }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: redis }
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-redis
+  labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: redis }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: tenantiq, app.kubernetes.io/component: redis }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999 }
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }

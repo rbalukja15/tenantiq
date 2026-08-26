@@ -33,7 +33,16 @@ dependencies = [
 # tests/test_toolchain.py does not import a transitive dependency by luck. pip-tools is deliberately
 # absent: `make lock` runs it inside the release image, so shipping it (and the pip/setuptools pins
 # it drags in) to every developer and every CI run would buy nothing.
-dev = ["pytest>=8.0", "pytest-django>=4.8", "ruff>=0.6", "black>=24.0", "packaging>=24.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-django>=4.8",
+    "ruff>=0.6",
+    "black>=24.0",
+    "packaging>=24.0",
+    # tests/test_k8s_manifests.py reads rendered manifests (#24). Hand-parsing multi-document
+    # YAML to check a deployment invariant would be its own source of bugs.
+    "pyyaml>=6.0",
+]
 
 [tool.ruff]
 line-length = 100

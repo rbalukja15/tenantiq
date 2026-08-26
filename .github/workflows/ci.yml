@@ -32,6 +32,10 @@ jobs:
       # Fail the job if the Postgres-only isolation proofs ever silently skip (#50): a misconfigured
       # DB backend or a skipped RLS test can't leave "isolation is sacred" unproven while CI is green.
       TENANTIQ_REQUIRE_POSTGRES: "1"
+      # Same reasoning for the deployment manifests (#24): tests/test_k8s_manifests.py skips when
+      # kubectl is absent so a fresh clone stays green, and a skip in CI would mean the overlays are
+      # unchecked while the job passes. kubectl is preinstalled on the GitHub-hosted runners.
+      TENANTIQ_REQUIRE_KUBECTL: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

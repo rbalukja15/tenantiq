@@ -1451,3 +1451,58 @@ regression in *rendering* would slip past, because this is HTTP-level by design.
 
 No new unit tests — the artifact is a script, and its test is the revert-check above. 416 backend
 tests unchanged.
+
+## 2026-08-24 — M6 #24: the manifests would have had to lie
+
+Base manifests plus `dev` and `prod` Kustomize overlays. Writing them is mostly mechanical; the
+useful part was not. **A manifest is an executable claim about what the system can do**, and three of
+the claims the obvious manifests would have made are false for this codebase today.
+
+Compose had been hiding all three. `docker compose up` runs one of everything on one machine with one
+filesystem, so nothing had ever forced the questions Kubernetes asks on the first line: how many
+replicas, which volume access mode, what happens during a rolling update.
+
+1. **The BFF cannot be replicated.** `frontend/lib/session.ts` keeps sessions in an in-process `Map`
+   on `globalThis`. A second replica has a different `Map`, so a request the load balancer sends
+   there finds no session and answers 401 — users signed out intermittently, depending on which pod
+   they reach.
+2. **The API cannot be replicated either, for an unrelated reason.** It writes uploads to a volume
+   the worker reads, so the claim is ReadWriteMany — which most cloud block storage does not provide,
+   and where it does, more replicas means more writers on one filesystem.
+3. **The frontend image is a development server.** `frontend/Dockerfile`'s CMD is `next dev`. The
+   prod overlay deploys what it is given, so it is production-grade only once a production image
+   exists (#25).
+
+So `replicas: 1` on both public workloads with `strategy: Recreate`, and the reason written in the
+patch file next to the number. `replicas: 3` would have looked more professional and been a lie. The
+worker — no session, no traffic — is the one thing that scales, and it is 2.
+
+**Testing the manifests turned out to matter more than writing them.** `kubectl kustomize` tells you
+YAML parses. It cannot tell you the Ingress still refuses to route to Django (ADR-0013 §1: an Ingress
+to the API bypasses the CSRF gate, the path allowlist and both header allowlists), that prod still
+renders no Secret, or that a key in the ConfigMap is one the settings module actually reads. Fifteen
+tests, seven mutations, all killed — including routing the Ingress at the backend and scaling the
+frontend to three.
+
+The ConfigMap check is the one I would keep if I could only keep one. It carries all ~30 documented
+`TENANTIQ_*` tunables, because compose's `x-backend-env` forwards nine of ~35 and the rest silently
+do nothing — and the test asserts the mirror image too: every key must be one `config/settings.py`
+reads, so a typo cannot sit there looking configured. Same defect as #54's lint-pin drift, arriving
+from a third direction.
+
+Two small mechanical things worth recording. Kustomize's `patches:` parses **one** document per
+entry, so a multi-document patch file fails to build rather than applying the first one — better than
+the alternative, but the error does not say so. And `make help`'s grep was `^[a-zA-Z_-]+`, so
+`k8s-dev` and `k8s-prod` existed, worked, and were invisible; a target nobody can discover is a
+target nobody runs.
+
+One thing I avoided: a third copy of the Postgres bootstrap SQL. Kustomize cannot read a file outside
+its own root, but it *can* include another kustomization directory — so `infra/postgres/` has one and
+the dev overlay consumes the same bytes compose mounts. CI still holds a third rendition as inline
+Python because a service container has no init hook; that one predates this change and is called out
+rather than quietly matched.
+
+Nothing here has been applied to a real cluster. These manifests are verified to render and to
+satisfy their invariants, which is not the same as verified to run, and the ADR says so.
+
+431 backend tests, up from 416.
