@@ -49,8 +49,17 @@ Never in git. Four keys, consumed by the backend, the worker and the migrate Job
 kubectl -n tenantiq create secret generic tenantiq-secrets \
   --from-literal=DATABASE_URL='postgresql://USER:PASS@HOST:5432/tenantiq' \
   --from-literal=DJANGO_SECRET_KEY="$(openssl rand -base64 48)" \
-  --from-literal=ANTHROPIC_API_KEY='...'
+  --from-literal=VOYAGE_API_KEY='...' \
+  --from-literal=ANTHROPIC_API_KEY=''
 ```
+
+`VOYAGE_API_KEY` is required — the prod overlay points the embedder at Voyage (#53, ADR-0020), and
+without a key it raises before making a request rather than handing you a vendor 401.
+
+**`ANTHROPIC_API_KEY` is deliberately empty above.** Embeddings are a one-off per document; generation
+is per query and bounded only by traffic. With no key the LLM factory falls back to Ollama, which does
+not run in this namespace — so ingestion works, questions fail loudly, and nothing bills an account
+by accident. Set it when you want the deployment to answer, and let #49's per-tenant quotas cap it.
 
 External Secrets or Sealed Secrets work the same way as long as the resulting Secret is named
 `tenantiq-secrets`.
@@ -75,6 +84,25 @@ CREATE EXTENSION IF NOT EXISTS vector;   -- as an admin: pgvector is not a trust
 
 Deploying against a superuser connection string will work, pass every request, and silently disable
 the second layer of tenant isolation. Nothing in the cluster can detect that — check the role.
+
+### 3b. Upgrading an existing deployment across the 1024-dim change
+
+Migration `0014` widens the embedding column from 768 to 1024 and **discards every stored vector**
+(ADR-0020 — a 768-dim vector has no meaningful 1024-dim equivalent). Documents keep their text,
+chunks and offsets; only the vectors go, and retrieval returns nothing until they are rebuilt:
+
+```bash
+kubectl -n $NS exec deploy/tenantiq-backend -- python manage.py backfill_embeddings
+```
+
+It only touches rows where `embedding IS NULL`, so it is idempotent and resumable. Run it directly
+after the migrate Job and before announcing the deployment — between the two, every query answers
+"no relevant context" rather than answering wrongly.
+
+The same applies locally: after pulling this change, `docker compose exec backend python manage.py
+migrate && docker compose exec backend python manage.py backfill_embeddings`. If `.env` still pins
+`TENANTIQ_EMBEDDING_MODEL=nomic-embed-text`, ingestion fails with a message naming both dimensions —
+that guard (#46) is working, not broken.
 
 ### 4. Apply, in this order
 

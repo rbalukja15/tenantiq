@@ -18,7 +18,9 @@ x-backend-env: &backend-env
   DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver,backend
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-change-me}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-  TENANTIQ_EMBEDDING_MODEL: ${TENANTIQ_EMBEDDING_MODEL:-nomic-embed-text}
+  # 1024-dim, matching the pgvector column and `voyage-4` in production (#53, ADR-0020).
+  # nomic-embed-text is 768 and no longer fits; pointing this back at it fails ingestion loudly.
+  TENANTIQ_EMBEDDING_MODEL: ${TENANTIQ_EMBEDDING_MODEL:-mxbai-embed-large}
 
 services:
   db:
@@ -51,6 +53,14 @@ services:
   # Local embedding backend (ADR-0004). The app's OllamaEmbedder calls /api/embed here.
   ollama:
     image: ollama/ollama
+    # Serve one model at a time (#53). This stack asks Ollama for two very different things — an
+    # embedding model on ingest and llama3.1 for generation — and Ollama keeps recently-used models
+    # resident. On a default 8 GB Docker VM, llama3.1 at TENANTIQ_LLM_NUM_CTX=8192 plus a resident
+    # embedding model exceeds the container's memory and the llama-server child is OOM-killed: every
+    # query then returns "Answer generation failed. Please try again." with an HTTP 500 underneath
+    # and nothing pointing at memory. Evicting instead costs a reload between phases and never that.
+    environment:
+      OLLAMA_MAX_LOADED_MODELS: "1"
     ports: ["11434:11434"]
     volumes:
       - "ollama:/root/.ollama"
@@ -69,7 +79,7 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: ollama:11434
-    entrypoint: ["ollama", "pull", "${TENANTIQ_EMBEDDING_MODEL:-nomic-embed-text}"]
+    entrypoint: ["ollama", "pull", "${TENANTIQ_EMBEDDING_MODEL:-mxbai-embed-large}"]
     restart: "no"
 
   # One-shot: apply migrations once (as tenantiq_app), before the API and worker start, so they

@@ -13,6 +13,7 @@ re-derived, never trimmed — and it must be reachable only by the tenant that o
 from __future__ import annotations
 
 import pytest
+from django.conf import settings
 from rest_framework.test import APIClient
 
 from app.auth.tenancy import tenant_for_issuer
@@ -80,7 +81,9 @@ def make_chunk(tenant: Tenant, *, title: str = "terms.txt", start: int = 0, end:
             char_count=end - start,
             start_offset=start,
             end_offset=end,
-            embedding=[0.1] * 768,
+            # Derived, never literal: the column width is settings-driven (#53), and a hardcoded
+            # dimension here fails at INSERT the day it changes rather than saying anything useful.
+            embedding=[0.1] * settings.TENANTIQ_EMBEDDING_DIM,
             embedding_model="test-model",
         )
 

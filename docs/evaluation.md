@@ -56,26 +56,48 @@ warning when that is what ran.
 
 |           |                                           |
 | --------- | ----------------------------------------- |
-| Run       | 14 August 2026                            |
-| Embedder  | `nomic-embed-text` via Ollama, 768-dim    |
+| Run       | 24 August 2026                            |
+| Embedder  | `mxbai-embed-large` via Ollama, 1024-dim  |
 | Chunking  | 800 target / 100 overlap tokens           |
 | Corpus    | 7 documents, 14 chunks, 30,936 characters |
 | Questions | 18 in-corpus, 3 out-of-corpus             |
 
-| Metric    | @1   | @3       | @5       |
-| --------- | ---- | -------- | -------- |
-| hit       | 0.56 | **1.00** | **1.00** |
-| precision | 0.56 | 0.35     | 0.22     |
-| recall    | 0.50 | 0.94     | 0.97     |
+| Metric    | @1       | @3       | @5       |
+| --------- | -------- | -------- | -------- |
+| hit       | **0.83** | **1.00** | **1.00** |
+| precision | 0.83     | 0.39     | 0.23     |
+| recall    | 0.75     | **1.00** | **1.00** |
 
-**MRR 0.75.**
+**MRR 0.91.**
 
-The shape of that is the finding: **the right passage is always within the top 3, but it is only the
-single best match a little over half the time.** Since the prompt is assembled from the top
-`TENANTIQ_RETRIEVAL_TOP_K` (default 5) sources, answers are groundable for every question in this
-set — but the model is frequently handed the correct passage as source [2] or [3] rather than [1],
-with near-miss passages above it. That is an argument for keeping `k` at 5 rather than trimming it,
-and a concrete target for a reranking step later.
+**The right passage is now the single best match for five questions in six**, and every relevant
+chunk is inside the top 3. The remaining misses are two questions where the correct passage lands at
+rank 2 or 3 behind a near-neighbour, which is what keeps `k` at 5 rather than trimming it.
+
+### What changed, and why the harness earned its keep
+
+#53 moved production embeddings to Voyage, whose `voyage-4` emits 1024 dimensions and cannot emit
+768 — so the local model changed with it, from `nomic-embed-text` to `mxbai-embed-large`. That was
+forced by a dimension constraint, not chosen for quality. It turned out to be a substantial upgrade,
+and **the only reason that is a fact rather than a hope is that the numbers were already being
+measured**:
+
+| Metric  | `nomic-embed-text` (768) | `mxbai-embed-large` (1024) |
+| ------- | ------------------------ | -------------------------- |
+| hit@1   | 0.56                     | **0.83**                   |
+| recall@1| 0.50                     | **0.75**                   |
+| recall@3| 0.94                     | **1.00**                   |
+| MRR     | 0.75                     | **0.91**                   |
+
+The previous entry's finding — _"the right passage is always in the top 3, but only the single best
+match a little over half the time"_ — is what this fixed. A reranking step is a much weaker argument
+now than it was a week ago.
+
+> **These are still not the production numbers.** Production embeds with `voyage-4`; this was
+> measured on the local model that happens to share its width. Re-run `make eval` with
+> `TENANTIQ_EMBEDDER_FACTORY=app.embeddings.build_voyage_embedder` and a `VOYAGE_API_KEY` to get
+> them. Every result here is stamped with the embedder that produced it precisely so the two can
+> never be confused.
 
 ### Choosing the similarity floor
 
@@ -85,18 +107,23 @@ includes three questions the corpus cannot answer, purely to measure **separatio
 
 |                                   |            |
 | --------------------------------- | ---------- |
-| Worst in-corpus top similarity    | 0.558      |
-| Best out-of-corpus top similarity | 0.403      |
-| Gap                               | **+0.155** |
+| Worst in-corpus top similarity    | 0.567      |
+| Best out-of-corpus top similarity | 0.441      |
+| Gap                               | **+0.126** |
 
-A floor anywhere in `(0.403, 0.558)` refuses every unanswerable question while still answering every
-answerable one. **The shipped default is `0.0`, which refuses nothing** — every question gets sources
-whether or not the corpus has an answer, and the refusal state the UI builds (ADR-0016) is
-unreachable in a default deployment. On this corpus a value around `0.45`–`0.50` is defensible.
+A floor anywhere in `(0.441, 0.567)` refuses every unanswerable question while still answering every
+answerable one. **The shipped default is still `0.0`, which refuses nothing** — every question gets
+sources whether or not the corpus has an answer, and the refusal state the UI builds (ADR-0016) is
+unreachable in a default deployment. That is #88, and on this corpus `0.50` sits inside the window.
 
-That number is corpus- and embedder-specific and should be re-derived, not copied, after #53 settles
-the production embedding provider. The gap being positive at all is the useful part: it means a
-threshold _can_ separate the two, which is not guaranteed.
+Note the gap **narrowed** (+0.155 → +0.126) even as every ranking metric improved. The two are not
+the same property: a better embedder pulls related text closer together, which helps ranking and
+makes the answerable/unanswerable boundary tighter, not wider. A model that ranks better is not
+automatically a model that refuses better.
+
+The window is corpus- and embedder-specific and must be re-derived, not copied, once the eval runs
+against `voyage-4` — the width matching does not make the geometry match. The gap being positive at
+all is the useful part: it means a threshold _can_ separate the two, which is not guaranteed.
 
 Note that the floor does not affect the metrics above — they are measured on raw nearest-neighbour
 results, because a threshold hiding a relevant chunk would show up as a retrieval failure rather than
@@ -108,8 +135,9 @@ as the tuning choice it is.
   corpus, so `hit@3` and `hit@5` saturate at 1.00 and cannot discriminate further. `hit@1` and `MRR`
   carry the signal at this size. Growing the dataset is a data change — drop a `.txt` into
   `dataset/corpus/` and add questions to `questions.json`; the harness needs no edit.
-- **One embedder, one model, one language.** Nothing here says how `nomic-embed-text` compares to a
-  hosted provider. Re-run after #53.
+- **One embedder, one model, one language.** These numbers are `mxbai-embed-large`'s. Production
+  runs `voyage-4` (#53), which shares the width and not the geometry — re-run with a `VOYAGE_API_KEY`
+  before quoting anything here as a production figure.
 - **Relevance is binary.** A chunk either contains a marker or does not; there is no graded
   relevance, so a chunk that is nearly right scores exactly as badly as one that is unrelated.
 - **These are retrieval numbers only.** Whether the answer built from those chunks is _faithful_ to
@@ -181,35 +209,55 @@ headline in whichever direction its failures happened to fall.
 
 |                  |                                                                   |
 | ---------------- | ----------------------------------------------------------------- |
-| Run              | 17 August 2026                                                    |
+| Run              | 26 August 2026                                                    |
+| Retrieval        | `mxbai-embed-large`, 1024-dim (#53)                               |
 | Generator        | `llama3.1` via Ollama                                             |
 | Judge            | `llama3.1` via Ollama — **the same model** (see the caveat below) |
-| Answers measured | 17 of 18                                                          |
-| Claims           | 50, of which 25 cited                                             |
+| Answers measured | **18 of 18**                                                      |
+| Claims           | 39, of which 25 cited                                             |
 
-|                        |          |
-| ---------------------- | -------- |
-| **grounded**           | **0.36** |
-| faithfulness           | 0.72     |
-| citation coverage      | 0.50     |
-| unsupported claims     | 7        |
-| unclear                | 0        |
-| **uncited figures**    | **18**   |
-| **invented citations** | **0**    |
+|                        | 17 Aug (768-dim retrieval) | 26 Aug (1024-dim retrieval) |
+| ---------------------- | -------------------------- | --------------------------- |
+| **grounded**           | 0.36                       | **0.49**                    |
+| faithfulness           | 0.72                       | **0.76**                    |
+| citation coverage      | 0.50                       | **0.64**                    |
+| unsupported claims     | 7                          | 6                           |
+| unclear                | 0                          | 0                           |
+| **uncited figures**    | **18**                     | **8**                       |
+| **invented citations** | **0**                      | **0**                       |
 
-**The finding is the citation discipline, not the support score.** Half the claims carry no citation at
-all, and eighteen sentences state a figure with nothing behind them — several quoting the source text
-almost verbatim, like _"Overdue undisputed amounts accrue interest at one percent (1%)…"_, with no
-marker. Against a contract whose first rule is that the LLM never computes numbers, that is the
-result that matters.
+Only retrieval changed between these runs — same generator, same judge, same questions. Better
+sources produced answers that cite more (0.50 → 0.64) and assert bare figures less than half as often
+(18 → 8). **Citation discipline is still the finding**: a third of claims carry no citation, and eight
+sentences state a figure with nothing behind them, against a contract whose first rule is that the
+LLM never computes numbers.
 
-**Zero invented citations** across 50 claims. The enforcement that does exist holds: the model cites
-real source numbers or does not cite at all.
+**Zero invented citations**, again. The enforcement that exists holds: the model cites real source
+numbers or does not cite at all.
 
-### Why 0.72 is a ceiling, not a measurement
+Note the denominator moved (50 → 39 claims), so the ratios are not measuring identical work. Fewer,
+longer claims is itself a consequence of better sources — see the claim-splitting limitation below.
+
+### The result that a score cannot show
+
+The 17 August run answered the late-payment question by quoting the MSA: _"Overdue undisputed amounts
+accrue interest at one percent (1%) per month."_ The 26 August run quotes **0.75%**, from Amendment
+No. 2, which reduced the rate.
+
+**The old answer was wrong, and its faithfulness score was fine.** It quoted its cited source
+verbatim, so a judge asking "is this claim supported by the text it cites?" must say yes. The corpus
+deliberately contains a superseding amendment, and only retrieval that surfaces the amendment over
+the original clause can get the question right.
+
+That is the ceiling on what this harness measures: **faithfulness is support-by-cited-source, not
+correctness-in-context.** An answer can be perfectly faithful and still stale, whenever a corpus
+contains documents that supersede each other — which is what a contract corpus mostly is. Catching it
+needed a human reading two documents; no number here moved to signal it.
+
+### Why 0.76 is a ceiling, not a measurement
 
 The generator and the judge were both `llama3.1`. A model grading its own output is
-known-optimistic, so read `faithfulness 0.72` and `grounded 0.36` as upper bounds. Note which
+known-optimistic, so read `faithfulness 0.76` and `grounded 0.49` as upper bounds. Note which
 numbers this does and does not touch:
 
 | Number                                                 | Judge-dependent?              |
@@ -234,7 +282,12 @@ floor.
   it; the trade-off against a sentence-segmentation dependency is in `app/eval/claims.py`.
 - **Relevance to the question is not measured.** A claim can be perfectly supported by its source and
   still not answer what was asked.
-- **One question could not be answered at all** — the local fallback returned an error, which is a
-  gap in coverage rather than a grounding result. See the note on the context window in the devlog.
+- **Coverage is now complete** — 18 of 18, where the first run measured 17. The gap was #90's
+  context-window bug, fixed since. A second infrastructure failure showed up on the way to this run
+  and is worth knowing about: with a larger embedding model resident, `llama3.1` at
+  `num_ctx=8192` exceeded the Ollama container's memory and every answer failed with a generic
+  message over an HTTP 500. `OLLAMA_MAX_LOADED_MODELS: 1` fixes it. A run where every answer fails
+  is easy to spot; the harness excluding failures from its scores is what stops a run where *some*
+  do from quietly reporting a better number.
 - **The judge is a measurement instrument with error.** Its verdicts and reasons are written to the
   `--json` output verbatim so a disagreement can be settled by reading them, not by trusting a score.

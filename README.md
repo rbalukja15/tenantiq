@@ -123,6 +123,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0017 — Managing a corpus from the browser](docs/adr/0017-document-management-ui.md)
 - [ADR-0018 — A build that resolves to the same thing twice](docs/adr/0018-reproducible-toolchain.md)
 - [ADR-0019 — Deploying with Kustomize](docs/adr/0019-kubernetes-deployment.md)
+- [ADR-0020 — Voyage for embeddings, and one dimension everywhere](docs/adr/0020-production-embedding-and-llm-providers.md)
 
 ## License
 

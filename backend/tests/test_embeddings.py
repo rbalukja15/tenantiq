@@ -14,11 +14,14 @@ import math
 import pytest
 
 from app.embeddings import (
+    EmbeddingConfigurationError,
     EmbeddingCountError,
     EmbeddingDimensionError,
     HashingEmbedder,
     OllamaEmbedder,
+    VoyageEmbedder,
     build_default_embedder,
+    build_voyage_embedder,
     embed_in_batches,
     get_embedder,
 )
@@ -249,3 +252,142 @@ def test_embed_in_batches_rejects_a_non_sequence_vector():
     message = str(exc.value)
     assert "TENANTIQ_EMBEDDING_DIM" in message
     assert "hashing-fake-v1" in message  # names the model, not a Python TypeError
+
+
+# --- Voyage (#53, ADR-0020) -----------------------------------------------------------------------
+#
+# The hosted embedder. Stubbed at the same single boundary as Ollama's: everything below asserts on
+# the request this builds, because that request is the whole contract — a wrong `input_type` costs
+# retrieval quality silently, and a wrong `output_dimension` costs the pgvector column.
+
+
+def _voyage_payload(*vectors: list[float], shuffled: bool = False) -> dict:
+    data = [{"object": "embedding", "embedding": v, "index": i} for i, v in enumerate(vectors)]
+    if shuffled:
+        data.reverse()
+    return {"object": "list", "data": data, "model": "voyage-4", "usage": {"total_tokens": 7}}
+
+
+def _capture_voyage(monkeypatch, payload: dict) -> dict:
+    captured: dict = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["authorization"] = request.headers.get("Authorization")
+        captured["timeout"] = timeout
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("app.embeddings.urlopen", fake_urlopen)
+    return captured
+
+
+def test_voyage_embedder_posts_documents_with_the_document_input_type(monkeypatch):
+    """`input_type` is a retrieval-quality lever, not a formality.
+
+    Voyage prepends a different retrieval prompt for `document` and `query`, and getting it wrong
+    degrades ranking without erroring — so the two Embedder methods must send different values. This
+    is the one asymmetry the Protocol's split into embed_documents/embed_query exists to express.
+    """
+    captured = _capture_voyage(monkeypatch, _voyage_payload([0.1, 0.2, 0.3]))
+    embedder = VoyageEmbedder(api_key="test-key", model="voyage-4", dim=3)
+
+    assert embedder.embed_documents(["hello"]) == [[0.1, 0.2, 0.3]]
+    assert captured["url"] == "https://api.voyageai.com/v1/embeddings"
+    assert captured["authorization"] == "Bearer test-key"
+    assert captured["body"]["input_type"] == "document"
+    assert captured["body"]["input"] == ["hello"]
+    assert captured["body"]["model"] == "voyage-4"
+
+
+def test_voyage_embedder_posts_a_query_with_the_query_input_type(monkeypatch):
+    captured = _capture_voyage(monkeypatch, _voyage_payload([0.4, 0.5, 0.6]))
+    embedder = VoyageEmbedder(api_key="test-key", model="voyage-4", dim=3)
+
+    assert embedder.embed_query("hello") == [0.4, 0.5, 0.6]
+    assert captured["body"]["input_type"] == "query"
+
+
+def test_voyage_embedder_pins_the_output_dimension(monkeypatch):
+    """The pgvector column is a fixed width, so the dimension is ours to state, not the model's.
+
+    voyage-4 supports 256/512/1024/2048 and defaults to 1024 today. Sending it explicitly means a
+    future change to that default cannot quietly start returning vectors the column will not take.
+    """
+    captured = _capture_voyage(monkeypatch, _voyage_payload([0.0] * 1024))
+    VoyageEmbedder(api_key="k", model="voyage-4", dim=1024).embed_documents(["x"])
+
+    assert captured["body"]["output_dimension"] == 1024
+
+
+def test_voyage_embedder_refuses_silent_truncation(monkeypatch):
+    """`truncation` defaults to true, which would embed a *prefix* of an over-long chunk.
+
+    Chunks are ~800 tokens against a 32k limit, so this cannot happen without a bug elsewhere — and
+    that is exactly why it should raise rather than return a vector for text nobody chose. A citation
+    that resolves to a chunk whose embedding covered half of it is the quiet kind of wrong (#45).
+    """
+    captured = _capture_voyage(monkeypatch, _voyage_payload([0.1]))
+    VoyageEmbedder(api_key="k", model="voyage-4", dim=1).embed_documents(["x"])
+
+    assert captured["body"]["truncation"] is False
+
+
+def test_voyage_embedder_restores_input_order_from_the_index_field(monkeypatch):
+    """Vectors are zipped onto chunks by position, so a reordered response mislabels every chunk.
+
+    The API documents that results come back in input order. This does not rely on it: the response
+    carries an explicit `index`, and honouring it costs one sort while trusting it costs a corpus
+    whose embeddings belong to the wrong text — a corruption nothing downstream could detect.
+    """
+    captured = _capture_voyage(monkeypatch, _voyage_payload([1.0, 0.0], [0.0, 1.0], shuffled=True))
+    embedder = VoyageEmbedder(api_key="k", model="voyage-4", dim=2)
+
+    assert embedder.embed_documents(["first", "second"]) == [[1.0, 0.0], [0.0, 1.0]]
+    assert captured["body"]["input"] == ["first", "second"]
+
+
+def test_voyage_embedder_without_a_key_fails_before_making_a_request(monkeypatch):
+    """No key means no call — a request that would 401 is still a request to a paid API.
+
+    It is also the clearest possible failure: a deployment that forgot VOYAGE_API_KEY should be told
+    that, not handed an authentication error from a vendor it may not know it was using.
+    """
+
+    def explode(*args, **kwargs):  # pragma: no cover - must never be reached
+        raise AssertionError("VoyageEmbedder called the API with no key configured")
+
+    monkeypatch.setattr("app.embeddings.urlopen", explode)
+
+    with pytest.raises(EmbeddingConfigurationError, match="VOYAGE_API_KEY"):
+        VoyageEmbedder(api_key="", model="voyage-4", dim=1024).embed_documents(["x"])
+
+
+def test_voyage_embedder_makes_no_request_for_an_empty_batch(monkeypatch):
+    def explode(*args, **kwargs):  # pragma: no cover - must never be reached
+        raise AssertionError("VoyageEmbedder called the API with nothing to embed")
+
+    monkeypatch.setattr("app.embeddings.urlopen", explode)
+
+    assert VoyageEmbedder(api_key="k", model="voyage-4", dim=1024).embed_documents([]) == []
+
+
+def test_voyage_embedder_reports_a_short_response_as_a_count_error(monkeypatch):
+    """One vector per input is the contract `embed_in_batches` enforces; catching it here names it."""
+    _capture_voyage(monkeypatch, _voyage_payload([0.1, 0.2]))
+    embedder = VoyageEmbedder(api_key="k", model="voyage-4", dim=2)
+
+    with pytest.raises(EmbeddingCountError):
+        embedder.embed_documents(["first", "second"])
+
+
+def test_build_voyage_embedder_reads_its_configuration_from_settings(settings):
+    settings.VOYAGE_API_KEY = "settings-key"
+    settings.TENANTIQ_VOYAGE_MODEL = "voyage-4-lite"
+    settings.TENANTIQ_EMBEDDING_DIM = 512
+
+    embedder = build_voyage_embedder()
+
+    assert embedder.api_key == "settings-key"
+    assert embedder.model == "voyage-4-lite"
+    assert embedder.dim == 512
