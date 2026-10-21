@@ -99,6 +99,11 @@ It only touches rows where `embedding IS NULL`, so it is idempotent and resumabl
 after the migrate Job and before announcing the deployment — between the two, every query answers
 "no relevant context" rather than answering wrongly.
 
+Expect pods still on the old 768-dim configuration to fail between the migrate Job and the rollout:
+their inserts no longer fit the column (`expected 1024 dimensions, not 768`), and their queries fail
+once the backfill starts writing 1024-dim vectors. The order in §4 keeps that window short; a
+document that failed inside it can be retried with `manage.py reingest_documents --status failed`.
+
 The same applies locally: after pulling this change, `docker compose exec backend python manage.py
 migrate && docker compose exec backend python manage.py backfill_embeddings`. If `.env` still pins
 `TENANTIQ_EMBEDDING_MODEL=nomic-embed-text`, ingestion fails with a message naming both dimensions —
