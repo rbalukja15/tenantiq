@@ -11,7 +11,7 @@ only touches `embedding IS NULL`. Documents keep their text, their chunks and th
 the vectors go. Until the backfill runs, retrieval returns nothing (`nearest_chunks` excludes null
 embeddings) rather than returning wrong things.
 
-Three ordering constraints, each of which fails loudly if ignored:
+Four ordering constraints, each of which fails loudly if ignored:
 
 1. **The HNSW index is dropped first.** It is built on `vector(768)` and an index cannot survive its
    column changing width.
@@ -22,6 +22,12 @@ Three ordering constraints, each of which fails loudly if ignored:
    reaches every row regardless of tenant. This is the same trap that bit the evaluation harness's
    cleanup in #21.
 3. **The index is recreated last**, on the new column.
+4. **Reversing clears the column before narrowing it.** Django unwinds operations last-first, so the
+   clear that serves the reverse sits *after* the AlterField: it runs first on the way back, and the
+   AlterField's reverse then casts an empty column to `vector(768)`. Clearing in the AlterField's
+   own position fails both ways back: a backfilled column cannot be cast to `vector(768)`
+   (`expected 768 dimensions, not 1024`), and an empty one is left with no width at all, which the
+   HNSW index, recreated as the last step back, refuses (`column does not have dimensions`).
 
 SQLite has neither RLS nor a real vector type, so it takes the ORM path: the historical model here
 carries a plain manager (custom managers are not used in migrations), which is what makes an
@@ -55,11 +61,15 @@ def create_index(apps, schema_editor):
 
 
 def clear_embeddings(apps, schema_editor):
-    """Discard every stored vector and the model label that described it."""
+    """Discard every stored vector and the model label that described it.
+
+    Runs in both directions (constraint 4): forward before the AlterField widens the column, and in
+    reverse before it narrows it. Reversing cannot bring the old vectors back; it restores the width.
+    """
     if schema_editor.connection.vendor == "postgresql":
         # DDL, so RLS does not filter it — see the module docstring. `USING NULL` rewrites the table
-        # with an empty column, which also makes the AlterField below a formality rather than a cast
-        # that would fail on 768-dim data.
+        # with an empty column, which also makes the AlterField a formality in either direction rather
+        # than a cast that would fail on vectors of the other width.
         with schema_editor.connection.cursor() as cursor:
             cursor.execute(f"ALTER TABLE {TABLE} ALTER COLUMN embedding TYPE vector USING NULL")
             cursor.execute(
@@ -67,13 +77,6 @@ def clear_embeddings(apps, schema_editor):
             )
         return
     apps.get_model("app", "Chunk").objects.update(embedding=None, embedding_model="")
-
-
-def unclear_embeddings(apps, schema_editor):
-    """Reversing this migration cannot bring the old vectors back; it only restores the width."""
-    if schema_editor.connection.vendor == "postgresql":
-        with schema_editor.connection.cursor() as cursor:
-            cursor.execute(f"ALTER TABLE {TABLE} ALTER COLUMN embedding TYPE vector USING NULL")
 
 
 class Migration(migrations.Migration):
@@ -84,7 +87,7 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.RunPython(drop_index, create_index),
-        migrations.RunPython(clear_embeddings, unclear_embeddings),
+        migrations.RunPython(clear_embeddings, migrations.RunPython.noop),
         migrations.AlterField(
             model_name="chunk",
             name="embedding",
@@ -92,5 +95,8 @@ class Migration(migrations.Migration):
                 blank=True, dimensions=1024, editable=False, null=True
             ),
         ),
+        # The reverse's clear (constraint 4). Unwound before the AlterField, so its narrowing cast
+        # meets an empty column rather than 1024-dim vectors.
+        migrations.RunPython(migrations.RunPython.noop, clear_embeddings),
         migrations.RunPython(create_index, drop_index),
     ]
