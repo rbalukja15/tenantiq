@@ -18,11 +18,20 @@ from app.models import Chunk
 
 
 def nearest_chunks(query: str, k: int = 5) -> list[Chunk]:
-    """Return the active tenant's ``k`` chunks most similar to ``query`` (nearest first)."""
-    query_vector = get_embedder().embed_query(query)
+    """Return the active tenant's ``k`` chunks most similar to ``query`` (nearest first).
+
+    Only chunks embedded by the active embedder's model are candidates (#53). Two models of the same
+    width produce vectors the column accepts and the distance operator happily compares, but the
+    numbers mean nothing across spaces: after a provider switch without a re-embed, an unfiltered
+    search would return confident neighbours from the wrong one. Filtering on ``embedding_model``
+    turns that into no results, which the caller already answers as "no relevant context".
+    """
+    embedder = get_embedder()
+    query_vector = embedder.embed_query(query)
     _enable_iterative_index_scan()
     chunks = list(
         Chunk.objects.exclude(embedding=None)
+        .filter(embedding_model=embedder.model)
         .annotate(distance=CosineDistance("embedding", query_vector))
         .order_by("distance")[:k]
     )

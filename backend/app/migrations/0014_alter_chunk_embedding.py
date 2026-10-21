@@ -6,10 +6,10 @@ widths `voyage-4` can emit, so there is no configuration that avoids this.
 
 **Every existing embedding is discarded.** A 768-dim vector cannot be widened into a meaningful
 1024-dim one — the numbers mean nothing in the new space — so the honest operation is to drop them
-and re-embed. `manage.py backfill_embeddings` then refills exactly the rows this nulls, because it
-only touches `embedding IS NULL`. Documents keep their text, their chunks and their offsets; only
-the vectors go. Until the backfill runs, retrieval returns nothing (`nearest_chunks` excludes null
-embeddings) rather than returning wrong things.
+and re-embed. `manage.py backfill_embeddings` then refills every row this nulls, because it embeds
+any chunk without a current embedding. Documents keep their text, their chunks and their offsets;
+only the vectors go. Until the backfill runs, retrieval returns nothing (`nearest_chunks` excludes
+null embeddings) rather than returning wrong things.
 
 Four ordering constraints, each of which fails loudly if ignored:
 

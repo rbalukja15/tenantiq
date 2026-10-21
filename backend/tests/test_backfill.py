@@ -65,6 +65,28 @@ def test_backfill_is_idempotent():
     assert "0 chunk" in out.getvalue()  # nothing left to do
 
 
+def test_backfill_reembeds_chunks_left_by_another_model(settings):
+    # Retrieval skips vectors from any model but the active one (#53), and two models of the same
+    # width give the column nothing to object to, so after a switch the backfill has to replace the
+    # old vectors rather than only fill NULLs; otherwise the corpus stays unsearchable.
+    a = _tenant("acme")
+    _chunk_without_embedding(a, "text embedded by the previous provider")
+    call_command("backfill_embeddings")
+    dim = settings.TENANTIQ_EMBEDDING_DIM
+    settings.TENANTIQ_EMBEDDER_FACTORY = lambda: HashingEmbedder(dim, model="another-model")
+
+    out = StringIO()
+    call_command("backfill_embeddings", stdout=out)
+
+    with tenant_context(a):
+        assert Chunk.objects.get().embedding_model == "another-model"
+    assert "Backfill complete: 1 chunk(s)" in out.getvalue()
+
+    out = StringIO()
+    call_command("backfill_embeddings", stdout=out)
+    assert "Backfill complete: 0 chunk(s)" in out.getvalue()  # idempotent under the new model too
+
+
 def test_backfill_aborts_loudly_on_count_mismatch(monkeypatch):
     # The backfill routes through the same embedder boundary as ingestion (#46), so a backend that
     # returns too few vectors aborts with a clear error rather than writing a mismatched set —

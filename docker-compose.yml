@@ -24,8 +24,9 @@ x-backend-env: &backend-env
   # Voyage, forwarded so the stack — and `make eval`, which runs inside it — can measure the
   # production embedder: set TENANTIQ_EMBEDDER_FACTORY=app.embeddings.build_voyage_embedder and
   # VOYAGE_API_KEY in .env, then recreate the stack. Empty means unset, so Ollama stays the default.
-  # Both models are 1024-dim, so nothing flags a corpus embedded by the other one: after switching,
-  # run `manage.py reingest_documents`, or queries compare vectors from two different models.
+  # Both models are 1024-dim, so only the model name on each chunk tells the corpora apart:
+  # retrieval skips chunks another model embedded, and after switching every query answers "no
+  # relevant context" until `manage.py backfill_embeddings` has re-embedded them.
   TENANTIQ_EMBEDDER_FACTORY: ${TENANTIQ_EMBEDDER_FACTORY:-}
   VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
   TENANTIQ_VOYAGE_MODEL: ${TENANTIQ_VOYAGE_MODEL:-voyage-4}

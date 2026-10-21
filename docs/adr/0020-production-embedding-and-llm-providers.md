@@ -34,9 +34,9 @@ one number in every config file.
 
 **Migration 0014 discards every existing vector.** A 768-dim vector cannot be widened into a
 meaningful 1024-dim one, so the honest operation is to drop them; `manage.py backfill_embeddings`
-refills exactly the rows it nulls, because it only touches `embedding IS NULL`. Documents keep their
-text, chunks and offsets. Until the backfill runs retrieval returns nothing, rather than returning
-wrong things.
+refills every row it nulls, because it embeds any chunk without a current embedding. Documents keep
+their text, chunks and offsets. Until the backfill runs retrieval returns nothing, rather than
+returning wrong things.
 
 The migration clears the data with **DDL rather than an UPDATE**, and that is not a style choice.
 `app_chunk` has FORCE'd row-level security (ADR-0002) and a migration runs with no
@@ -100,6 +100,16 @@ is `migrate` then `backfill_embeddings`, and the dimension guard from #46 makes 
 loud: pointing `TENANTIQ_EMBEDDING_MODEL` back at a 768 model fails ingestion with a message naming
 both numbers rather than storing a vector the column rejects. That guard fired for real during this
 work, when a stale `.env` still pinned `nomic-embed-text`.
+
+**A switch between the two 1024-dim models fails closed.** The #46 guard checks widths, and
+`mxbai-embed-large` and `voyage-4` share one, so the column takes either model's vectors and the
+distance operator compares them without complaint. Retrieval therefore searches only chunks whose
+`embedding_model` is the active embedder's: a corpus nobody re-embedded after a switch returns
+nothing, and every question gets the "no relevant context" refusal instead of confident neighbours
+from the wrong space. `backfill_embeddings` re-embeds those chunks from their stored text. The price
+is that renaming a model, even cosmetically (`mxbai-embed-large` to `mxbai-embed-large:latest`),
+also empties retrieval until the backfill runs. That is the right direction to fail in, and it is
+what ADR-0004 recorded `embedding_model` for; until now nothing read it.
 
 **Voyage's free grant is one-time, not recurring.** It is enormous relative to this corpus, but a
 deployment that re-embeds continuously would eventually exhaust it and start billing at

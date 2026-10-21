@@ -95,9 +95,9 @@ chunks and offsets; only the vectors go, and retrieval returns nothing until the
 kubectl -n $NS exec deploy/tenantiq-backend -- python manage.py backfill_embeddings
 ```
 
-It only touches rows where `embedding IS NULL`, so it is idempotent and resumable. Run it directly
-after the migrate Job and before announcing the deployment — between the two, every query answers
-"no relevant context" rather than answering wrongly.
+It only touches chunks with no embedding, or one from another model, so it is idempotent and
+resumable. Run it directly after the migrate Job and before announcing the deployment — between the
+two, every query answers "no relevant context" rather than answering wrongly.
 
 Expect pods still on the old 768-dim configuration to fail between the migrate Job and the rollout:
 their inserts no longer fit the column (`expected 1024 dimensions, not 768`), and their queries fail

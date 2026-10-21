@@ -1586,3 +1586,11 @@ it by reading two source files because a number looked odd. Nothing in the harne
 Voyage's width; matching widths is not matching geometry. `make eval` with a `VOYAGE_API_KEY` gets
 the real ones, and #88's floor has to come from that run. Every report is stamped with the embedder
 that produced it precisely so the two can never be confused.
+
+**One width also means a provider switch is silent**, and review caught it. The #46 guard compares
+widths, so after moving from `mxbai-embed-large` to `voyage-4` without re-embedding, queries would
+have ranked the old corpus by distances between two unrelated spaces, and answered confidently from
+whatever came out. `Chunk.embedding_model` has recorded the source since #12 and nothing read it.
+Retrieval now searches only the active model's chunks, so a stale corpus gets the honest "no
+relevant context" refusal, and `backfill_embeddings` re-embeds chunks from another model as well as
+the empty ones.

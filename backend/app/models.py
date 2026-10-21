@@ -184,7 +184,7 @@ class Chunk(TenantOwnedModel):
     end_offset = models.PositiveIntegerField(default=0)
     # The chunk's embedding vector (#12). Null until ingestion/backfill fills it; the dimension is
     # fixed (a pgvector column needs a fixed width), so changing models means a migration + re-backfill.
-    # ``embedding_model`` records the source so a mixed/stale index is detectable.
+    # ``embedding_model`` records the source, and retrieval searches only the active model's (#53).
     embedding = VectorField(
         dimensions=settings.TENANTIQ_EMBEDDING_DIM, null=True, blank=True, editable=False
     )
