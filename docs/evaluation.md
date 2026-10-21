@@ -95,9 +95,10 @@ now than it was a week ago.
 
 > **These are still not the production numbers.** Production embeds with `voyage-4`; this was
 > measured on the local model that happens to share its width. Re-run `make eval` with
-> `TENANTIQ_EMBEDDER_FACTORY=app.embeddings.build_voyage_embedder` and a `VOYAGE_API_KEY` to get
-> them. Every result here is stamped with the embedder that produced it precisely so the two can
-> never be confused.
+> `TENANTIQ_EMBEDDER_FACTORY=app.embeddings.build_voyage_embedder` and a `VOYAGE_API_KEY` in `.env`
+> to get them, after recreating the stack — `make eval` runs inside it, so the container only sees
+> what compose forwarded when it started. Every result here is stamped with the embedder that
+> produced it precisely so the two can never be confused.
 
 ### Choosing the similarity floor
 

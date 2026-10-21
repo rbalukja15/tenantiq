@@ -21,6 +21,14 @@ x-backend-env: &backend-env
   # 1024-dim, matching the pgvector column and `voyage-4` in production (#53, ADR-0020).
   # nomic-embed-text is 768 and no longer fits; pointing this back at it fails ingestion loudly.
   TENANTIQ_EMBEDDING_MODEL: ${TENANTIQ_EMBEDDING_MODEL:-mxbai-embed-large}
+  # Voyage, forwarded so the stack — and `make eval`, which runs inside it — can measure the
+  # production embedder: set TENANTIQ_EMBEDDER_FACTORY=app.embeddings.build_voyage_embedder and
+  # VOYAGE_API_KEY in .env, then recreate the stack. Empty means unset, so Ollama stays the default.
+  # Both models are 1024-dim, so nothing flags a corpus embedded by the other one: after switching,
+  # run `manage.py reingest_documents`, or queries compare vectors from two different models.
+  TENANTIQ_EMBEDDER_FACTORY: ${TENANTIQ_EMBEDDER_FACTORY:-}
+  VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+  TENANTIQ_VOYAGE_MODEL: ${TENANTIQ_VOYAGE_MODEL:-voyage-4}
 
 services:
   db:

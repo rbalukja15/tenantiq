@@ -209,13 +209,12 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 TENANTIQ_VOYAGE_MODEL = os.environ.get("TENANTIQ_VOYAGE_MODEL", "voyage-4")
 TENANTIQ_VOYAGE_TIMEOUT_SECONDS = float(os.environ.get("TENANTIQ_VOYAGE_TIMEOUT_SECONDS", "30"))
-TENANTIQ_EMBEDDER_FACTORY = os.environ.get(
-    "TENANTIQ_EMBEDDER_FACTORY",
-    (
-        "app.embeddings.build_fake_embedder"
-        if "pytest" in sys.modules
-        else "app.embeddings.build_default_embedder"
-    ),
+# Empty counts as unset (`or`, not a get() default): compose forwards this as `${...:-}`, and an
+# empty string would otherwise be imported as a dotted path and fail every ingestion and query.
+TENANTIQ_EMBEDDER_FACTORY = os.environ.get("TENANTIQ_EMBEDDER_FACTORY") or (
+    "app.embeddings.build_fake_embedder"
+    if "pytest" in sys.modules
+    else "app.embeddings.build_default_embedder"
 )
 
 # RAG query engine — retrieval + prompt assembly (M3, #14). Tuned like the chunking knobs.
