@@ -8,8 +8,10 @@ in for a real model when proving nearest-neighbour ordering (test_retrieval.py).
 
 from __future__ import annotations
 
+import io
 import json
 import math
+from urllib.error import HTTPError
 
 import pytest
 
@@ -17,6 +19,7 @@ from app.embeddings import (
     EmbeddingConfigurationError,
     EmbeddingCountError,
     EmbeddingDimensionError,
+    EmbeddingRequestError,
     HashingEmbedder,
     OllamaEmbedder,
     VoyageEmbedder,
@@ -379,6 +382,52 @@ def test_voyage_embedder_reports_a_short_response_as_a_count_error(monkeypatch):
 
     with pytest.raises(EmbeddingCountError):
         embedder.embed_documents(["first", "second"])
+
+
+def _voyage_refusing(monkeypatch, status: int, detail: str = "refused") -> None:
+    def fake_urlopen(request, timeout=None):
+        body = io.BytesIO(json.dumps({"detail": detail}).encode("utf-8"))
+        raise HTTPError(request.full_url, status, "refused", {}, body)
+
+    monkeypatch.setattr("app.embeddings.urlopen", fake_urlopen)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_voyage_embedder_reports_a_rejected_key_as_a_configuration_error(monkeypatch, status):
+    """A revoked or mistyped key is the same problem as a missing one, and gets the same remedy.
+
+    Ingestion treats it as permanent, so the document fails once with a reason in the server log
+    instead of three backed-off retries that each meet the same 401.
+    """
+    _voyage_refusing(monkeypatch, status, "Provided API key is invalid.")
+    embedder = VoyageEmbedder(api_key="revoked", model="voyage-4", dim=1024)
+
+    with pytest.raises(EmbeddingConfigurationError, match="VOYAGE_API_KEY"):
+        embedder.embed_documents(["x"])
+
+
+def test_voyage_embedder_reports_a_refused_request_with_the_providers_reason(monkeypatch):
+    """A 400 is about the request, so retrying it only repeats it — and its reason is the diagnosis.
+
+    An unsupported ``output_dimension`` is the likeliest one: it is what a stray
+    TENANTIQ_EMBEDDING_DIM produces, and Voyage's message names it where a bare 400 would not.
+    """
+    _voyage_refusing(monkeypatch, 400, "output_dimension 768 is not supported for voyage-4")
+    embedder = VoyageEmbedder(api_key="k", model="voyage-4", dim=768)
+
+    with pytest.raises(EmbeddingRequestError, match="output_dimension 768 is not supported"):
+        embedder.embed_documents(["x"])
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 503])
+def test_voyage_embedder_leaves_rate_limits_and_outages_to_the_retry(monkeypatch, status):
+    """These describe the moment, not the request, so they stay plain HTTPErrors that Celery retries."""
+    _voyage_refusing(monkeypatch, status)
+    embedder = VoyageEmbedder(api_key="k", model="voyage-4", dim=1024)
+
+    with pytest.raises(HTTPError) as exc:
+        embedder.embed_documents(["x"])
+    assert exc.value.code == status
 
 
 def test_build_voyage_embedder_reads_its_configuration_from_settings(settings):

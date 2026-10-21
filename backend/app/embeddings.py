@@ -20,6 +20,7 @@ import json
 import math
 import re
 from typing import Protocol, runtime_checkable
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from django.conf import settings
@@ -33,11 +34,21 @@ class EmbeddingError(RuntimeError):
 
 
 class EmbeddingConfigurationError(EmbeddingError):
-    """The embedder cannot run as configured — a missing key, not a bad response.
+    """The embedder cannot run as configured — a missing or rejected key, not a bad response.
 
     Separate from the contract errors below because the remedy is different in kind: no retry, no
-    backoff, and nothing about the document is wrong. It is raised *before* any request, so a
-    deployment that forgot its key never spends one.
+    backoff, and nothing about the document is wrong, so ingestion fails the document at once. A
+    missing key is caught *before* any request, so a deployment that forgot its key never spends
+    one; a key the provider rejects (HTTP 401/403) is reported the same way.
+    """
+
+
+class EmbeddingRequestError(EmbeddingError):
+    """The provider refused the request itself — an HTTP 4xx that is not a rate limit or a timeout.
+
+    Permanent for the same reason as a configuration error: the identical request gets the identical
+    refusal, and for a hosted embedder each retry would also re-send every batch that had already
+    succeeded. A 408, a 429 and any 5xx stay plain ``HTTPError``s, which ingestion retries.
     """
 
 
@@ -130,6 +141,26 @@ class OllamaEmbedder:
         return self.embed_documents([text])[0]
 
 
+# 4xx statuses that describe the moment rather than the request: a timeout and a rate limit. Every
+# other 4xx is the provider refusing *this* request, which a retry would only repeat.
+_TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
+
+
+def _voyage_error_detail(exc: HTTPError) -> str:
+    """Voyage's own reason for a refusal (its JSON ``detail``), for the server log.
+
+    Never reaches a tenant: ingestion maps every embedder error to a generic message (#47). Bounded,
+    because the reason ends up in exception text and a log line, and it is optional — a body that
+    is not the JSON we expect costs the detail, never the classification.
+    """
+    try:
+        body = json.loads(exc.read() or b"{}")
+    except (OSError, ValueError):
+        return ""
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return f": {str(detail)[:200]}" if detail else ""
+
+
 class VoyageEmbedder:
     """Calls Voyage AI's ``/v1/embeddings`` — the production embedding backend (#53, ADR-0020).
 
@@ -196,8 +227,22 @@ class VoyageEmbedder:
                 "Authorization": f"Bearer {self.api_key}",
             },
         )
-        with urlopen(request, timeout=self.timeout) as response:
-            data = json.loads(response.read())
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                data = json.loads(response.read())
+        except HTTPError as exc:
+            if exc.code in _TRANSIENT_HTTP_STATUSES or exc.code >= 500:
+                raise  # a rate limit or an outage: ingestion's retry is the right answer
+            reason = _voyage_error_detail(exc)
+            if exc.code in (401, 403):
+                raise EmbeddingConfigurationError(
+                    f"Voyage rejected VOYAGE_API_KEY (HTTP {exc.code}{reason}). Check the key, or "
+                    "point TENANTIQ_EMBEDDER_FACTORY at app.embeddings.build_default_embedder."
+                ) from exc
+            raise EmbeddingRequestError(
+                f"Voyage refused the request (HTTP {exc.code}{reason}, model={self.model!r}, "
+                f"output_dimension={self.dim}); the same request cannot succeed on a retry."
+            ) from exc
 
         entries = data.get("data", [])
         if len(entries) != len(texts):

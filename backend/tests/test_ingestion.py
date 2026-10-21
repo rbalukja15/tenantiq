@@ -6,6 +6,9 @@ document becomes READY with ordered, tenant-scoped chunks; a bad/empty file beco
 
 from __future__ import annotations
 
+import io
+from urllib.error import HTTPError
+
 import pytest
 from django.conf import settings as django_settings
 from django.core.files.base import ContentFile
@@ -304,6 +307,65 @@ def test_ingestion_fails_permanently_on_soft_time_limit(monkeypatch):
         assert doc.attempts == 1  # not retried
         assert "too long" in doc.error.lower()  # the safe timeout message, not a raw traceback
         assert Chunk.objects.filter(document=doc).count() == 0
+
+
+def _use_voyage(settings, monkeypatch, *, api_key: str, status: int | None) -> list[int]:
+    """Point ingestion at the real Voyage embedder, answering every request with ``status``."""
+    settings.TENANTIQ_EMBEDDER_FACTORY = "app.embeddings.build_voyage_embedder"
+    settings.VOYAGE_API_KEY = api_key
+    requests: list[int] = []
+
+    def fake_urlopen(request, timeout=None):
+        requests.append(status)
+        raise HTTPError(request.full_url, status, "refused", {}, io.BytesIO(b"{}"))
+
+    monkeypatch.setattr("app.embeddings.urlopen", fake_urlopen)
+    return requests
+
+
+@pytest.mark.parametrize(
+    ("api_key", "status"),
+    [
+        ("", None),  # the deploy that forgot VOYAGE_API_KEY: refused before any request
+        ("revoked", 401),  # a key Voyage rejects
+        ("k", 400),  # a request Voyage refuses outright (e.g. an unsupported output_dimension)
+    ],
+)
+def test_ingestion_fails_permanently_when_voyage_cannot_serve_the_request(
+    settings, monkeypatch, api_key, status
+):
+    # Each of these meets the same refusal on every attempt (#53), so it is recorded at once rather
+    # than left to Celery's three backed-off retries — which, against a hosted embedder, would also
+    # re-send every batch that had already succeeded.
+    a = _tenant("acme")
+    doc = _doc(a, body=b"some text to ingest")
+    requests = _use_voyage(settings, monkeypatch, api_key=api_key, status=status)
+
+    run_ingestion(doc.id, a.id)  # permanent -> recorded, does not raise (no retry)
+
+    with tenant_context(a):
+        doc.refresh_from_db()
+        assert doc.status == Document.Status.FAILED
+        assert doc.attempts == 1
+        # Sanitized (#47): the key's name and the provider's response go to the server log only.
+        assert doc.error and "VOYAGE_API_KEY" not in doc.error and "HTTP" not in doc.error
+        assert Chunk.objects.filter(document=doc).count() == 0
+    assert requests == ([] if status is None else [status])
+
+
+def test_ingestion_still_retries_a_voyage_rate_limit(settings, monkeypatch):
+    # A 429 describes the moment, not the request: it must keep propagating so the task retries.
+    a = _tenant("acme")
+    doc = _doc(a, body=b"some text to ingest")
+    _use_voyage(settings, monkeypatch, api_key="k", status=429)
+
+    with pytest.raises(HTTPError):
+        run_ingestion(doc.id, a.id)
+
+    with tenant_context(a):
+        doc.refresh_from_db()
+        assert doc.status == Document.Status.PROCESSING  # transient: left for the task to retry
+        assert doc.error == ""
 
 
 def test_mark_ingestion_failed_sanitizes_the_surfaced_reason(caplog):
