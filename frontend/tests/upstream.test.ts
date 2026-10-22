@@ -90,6 +90,7 @@ describe("filterResponseHeaders", () => {
       "cache-control": "no-cache",
       "retry-after": "5",
       "x-accel-buffering": "no",
+      "x-request-id": "3f2a9c",
       "set-cookie": "evil=1; Path=/",
       "content-length": "9999",
       "content-encoding": "gzip",
@@ -107,6 +108,7 @@ describe("filterResponseHeaders", () => {
       "retry-after",
       "vary",
       "x-accel-buffering",
+      "x-request-id",
     ]);
   });
 
@@ -131,6 +133,10 @@ describe("filterResponseHeaders", () => {
 
   it("keeps the SSE anti-buffering header that #19 depends on", () => {
     expect(filterResponseHeaders(upstreamResponseHeaders()).get("x-accel-buffering")).toBe("no");
+  });
+
+  it("relays the id the API logged the request under, so a reported failure can be found", () => {
+    expect(filterResponseHeaders(upstreamResponseHeaders()).get("x-request-id")).toBe("3f2a9c");
   });
 });
 
