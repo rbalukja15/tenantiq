@@ -29,9 +29,11 @@ SETTINGS = REPO_ROOT / "backend" / "config" / "settings.py"
 
 OVERLAYS = {"dev": "tenantiq-dev", "prod": "tenantiq"}
 
-# Images this repository builds. Third-party images (postgres, redis, ollama) drop privileges on
-# their own terms and are not ours to assert about.
-OURS = ("tenantiq/backend", "tenantiq/frontend")
+# Images this repository builds, under the local names the base uses (`tenantiq/backend`) and the
+# registry names the prod overlay maps them to (`ghcr.io/<owner>/tenantiq-backend`, #25).
+# Third-party images (postgres, redis, ollama) drop privileges on their own terms and are not ours
+# to assert about.
+OURS = re.compile(r"(^|/)tenantiq[/-](backend|frontend)([:@]|$)")
 
 
 def _require_kubectl() -> bool:
@@ -148,15 +150,39 @@ def test_every_container_declares_resource_requests(overlay: str) -> None:
 @pytest.mark.parametrize("overlay", sorted(OVERLAYS))
 def test_our_own_images_run_as_non_root(overlay: str) -> None:
     """Verified against the images themselves: both run `manage.py check` / node cleanly as uid 1000."""
-    offenders = []
+    offenders, checked = [], []
     for document in _render(overlay):
         pod = (document.get("spec", {}).get("template", {}) or {}).get("spec", {})
         runs_ours = any(
-            container.get("image", "").startswith(OURS) for container in _containers(document)
+            OURS.search(container.get("image", "")) for container in _containers(document)
         )
-        if runs_ours and not pod.get("securityContext", {}).get("runAsNonRoot"):
-            offenders.append(f"{document['kind']}/{document['metadata']['name']}")
+        if not runs_ours:
+            continue
+        checked.append(f"{document['kind']}/{document['metadata']['name']}")
+        if not pod.get("securityContext", {}).get("runAsNonRoot"):
+            offenders.append(checked[-1])
+    # When the prod overlay renamed the images to their registry names (#25), a prefix match on the
+    # local names stopped matching anything there, and this test passed for prod by checking nothing.
+    assert checked, f"found none of our images in the {overlay} overlay, so nothing was checked"
     assert not offenders, f"runs one of our images as root: {offenders}"
+
+
+@pytest.mark.parametrize("overlay", sorted(OVERLAYS))
+def test_the_api_is_served_by_gunicorn_not_the_dev_server(overlay: str) -> None:
+    """No overlay serves the API with Django's development server (#25, ADR-0022).
+
+    That is `manage.py runserver`, which Django's documentation says must never serve production.
+    Compose still runs it, for the autoreload; nothing here may.
+    """
+    deployment = next(
+        doc
+        for doc in _render(overlay)
+        if doc["kind"] == "Deployment" and doc["metadata"]["name"] == "tenantiq-backend"
+    )
+    (container,) = _containers(deployment)
+
+    assert container["command"][0] == "gunicorn", container["command"]
+    assert "runserver" not in container["command"]
 
 
 @pytest.mark.parametrize("overlay", sorted(OVERLAYS))

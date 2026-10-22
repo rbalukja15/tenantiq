@@ -1594,3 +1594,48 @@ whatever came out. `Chunk.embedding_model` has recorded the source since #12 and
 Retrieval now searches only the active model's chunks, so a stale corpus gets the honest "no
 relevant context" refusal, and `backfill_embeddings` re-embeds chunks from another model as well as
 the empty ones.
+
+## 2026-10-22 — M6 #25: two dev servers, and a release order that ran backwards
+
+I expected #25 to be a workflow file. Reading the manifests with a pipeline in mind, the cluster
+would have run two development servers: the frontend's `next dev`, which ADR-0019 had flagged, and
+the API's `manage.py runserver`, which nobody had. `backend.yaml` had copied its command from
+compose.
+
+**The obvious gunicorn config is wrong for this API.** The default sync worker gives a whole process
+to one request, and an answer streams for as long as the model generates, so two workers would
+serve two questions while every document list queued behind them. Its 30-second timeout would also
+kill any answer that took longer. The threaded worker fixes both, and I wanted that tested rather
+than written in a comment: `test_gunicorn.py` runs a real gunicorn on the shipped config with a
+stand-in app. With the worker switched back to sync, a ping made during a stream waited 5.01 s, and
+a four-second stream under a two-second timeout was cut off after 110 bytes. One more default had
+to move: gunicorn closes idle connections after 2 s, and the BFF's fetch keeps them for 4, so the
+BFF could send a request down a socket gunicorn had just closed.
+
+**The frontend image is Next's standalone output**: 66 MB of traced dependencies instead of a
+695 MB `node_modules`, and no environment baked in, because nothing is `NEXT_PUBLIC_`. The trap was
+`HOSTNAME`. `server.js` binds to it, and platforms set it to the container's own name, which makes
+the server refuse `kubectl port-forward` on localhost. containerd applies the image's environment
+after its own, so `ENV HOSTNAME=0.0.0.0` would have been enough there, but ECS overrides an image's
+value (vercel/next.js#58657), so the command sets it instead.
+
+**The documented release order guarded nothing.** docs/deployment.md applied the whole overlay,
+then waited for the migrate Job. The first apply had already rolled the Deployments, so the new API
+and worker started against the old schema while the wait looked after them. `scripts/deploy.py`
+now owns the order for CI and operators alike: check the Secret, apply everything that is not a
+workload, run the migration to completion (stopping with its logs if it fails), then roll. Its
+tests drive it against a recording kubectl, and the old order fails three of them. Images are
+pinned by digest. The prod overlay names a tag CI never pushes, so a hand `kubectl apply` fails to
+pull rather than running something nobody tested.
+
+Two smaller things came from trying rather than reading. A managed Redis over TLS needs
+`?ssl_cert_reqs=required` in its URL, or Celery refuses to start; that URL also carries a password,
+so `REDIS_URL` moved from the ConfigMap into the Secret, and the deploy checks for it. And renaming
+the prod images to their registry names made `test_our_own_images_run_as_non_root` match nothing in
+prod, so it passed by checking nothing. It now fails if it finds none of our images.
+
+What is left is the part I cannot do from here: a cluster, and the live link. Until the `production`
+environment has a `KUBECONFIG` secret, the deploy job publishes the images and stops green with a
+notice. A red build on every merge before anyone has rented a server would only teach people to
+ignore red. Whichever host it is also decides the ingress controller: the overlay's annotations are
+written for ingress-nginx, which upstream retired in March 2026.

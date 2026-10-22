@@ -27,31 +27,44 @@ the dev overlay exists so the manifests themselves get exercised.
 
 ## Deploying
 
-### 1. Build and push images
+### 1. Images
+
+CI builds both images on every pull request and pushes them from main (#25, ADR-0022), as
+`ghcr.io/rbalukja15/tenantiq-backend:sha-<commit>` and `ghcr.io/rbalukja15/tenantiq-frontend:sha-<commit>`.
+A release is deployed by digest, which the push step prints in the CI log, never by tag. To build
+them by hand:
 
 ```bash
 docker build -t <registry>/tenantiq-backend:<tag> ./backend
-docker build -t <registry>/tenantiq-frontend:<tag> ./frontend
+docker build -t <registry>/tenantiq-frontend:<tag> ./frontend   # default target: production
 ```
 
-> **The frontend image is a dev-server image.** `frontend/Dockerfile`'s CMD is `next dev`. A
-> production image (`next build`, standalone output) does not exist yet and belongs with #25. Until
-> it does, `prod` renders correctly and deploys a development server.
+Both are production servers. The API runs gunicorn with threads, configured in
+`backend/gunicorn.conf.py`, so that a streaming answer holds one thread rather than a whole worker.
+The frontend runs Next's standalone server as uid 1000. Compose builds the frontend's `dev` target
+and runs the API with `runserver` instead, for their autoreload.
 
-Point the overlay at your tags with the `images:` transformer in its `kustomization.yaml`, or from a
-pipeline with `kustomize edit set image`.
+### 2. Create the namespace and the Secret (prod only)
 
-### 2. Create the Secret (prod only)
-
-Never in git. Four keys, consumed by the backend, the worker and the migrate Job:
+Never in git. Five keys, consumed by the backend, the worker and the migrate Job, in a namespace
+that has to exist first:
 
 ```bash
+kubectl create namespace tenantiq
 kubectl -n tenantiq create secret generic tenantiq-secrets \
   --from-literal=DATABASE_URL='postgresql://USER:PASS@HOST:5432/tenantiq' \
+  --from-literal=REDIS_URL='rediss://USER:PASS@HOST:6379/0?ssl_cert_reqs=required' \
   --from-literal=DJANGO_SECRET_KEY="$(openssl rand -base64 48)" \
   --from-literal=VOYAGE_API_KEY='...' \
   --from-literal=ANTHROPIC_API_KEY=''
 ```
+
+`scripts/deploy.py` checks that all of them but `ANTHROPIC_API_KEY` are present before it changes
+anything, so a missing one stops the release instead of crash-looping its pods.
+
+`REDIS_URL` is the Celery broker and the throttle cache. It is here rather than in the ConfigMap
+because a managed Redis's URL carries its password. Over TLS (`rediss://`), keep
+`?ssl_cert_reqs=required`: without it Celery refuses to start.
 
 `VOYAGE_API_KEY` is required — the prod overlay points the embedder at Voyage (#53, ADR-0020), and
 without a key it raises before making a request rather than handing you a vendor 401.
@@ -109,28 +122,35 @@ migrate && docker compose exec backend python manage.py backfill_embeddings`. If
 `TENANTIQ_EMBEDDING_MODEL=nomic-embed-text`, ingestion fails with a message naming both dimensions —
 that guard (#46) is working, not broken.
 
-### 4. Apply, in this order
+### 4. Release with `scripts/deploy.py`
 
-`kubectl apply` has no ordering primitive, and Kustomize has no hooks. The sequencing is therefore
-the operator's (and, from #25, the pipeline's):
+`kubectl apply` has no ordering primitive, and Kustomize has no hooks, so the order of a release
+lives in one script. CI runs it on every green merge to main (see "Continuous deployment" below),
+and an operator runs the same thing by hand:
 
 ```bash
-NS=tenantiq
-kubectl kustomize infra/k8s/overlays/prod | kubectl apply -f -
-
-# The migrate Job is immutable once created, so a re-apply of an existing one fails rather than
-# re-running. Delete it first on every release:
-kubectl -n $NS delete job tenantiq-migrate --ignore-not-found
-kubectl kustomize infra/k8s/overlays/prod | kubectl apply -f -
-kubectl -n $NS wait --for=condition=complete job/tenantiq-migrate --timeout=300s
-
-kubectl -n $NS rollout status deploy/tenantiq-backend
-kubectl -n $NS rollout status deploy/tenantiq-worker
-kubectl -n $NS rollout status deploy/tenantiq-frontend
+scripts/deploy.py \
+  --backend  ghcr.io/rbalukja15/tenantiq-backend@sha256:<digest> \
+  --frontend ghcr.io/rbalukja15/tenantiq-frontend@sha256:<digest>
 ```
 
-Waiting on the Job is not optional politeness: without it the API and worker can start against an
-unmigrated schema and fail in ways that look like application bugs.
+It renders the prod overlay with both images pinned to those digests, then:
+
+1. checks `tenantiq-secrets` for the keys in section 2, and stops before changing anything if one is
+   missing;
+2. applies everything that is not a workload: config, services, the media volume, the Ingress and
+   the NetworkPolicy;
+3. deletes the previous `tenantiq-migrate` Job, whose pod template is immutable, applies the new one
+   and waits for it to finish. If the migration fails, it prints the Job's logs and stops, and the
+   cluster keeps serving the release it had;
+4. applies the Deployments and waits for each rollout.
+
+`--render-only` prints the manifests and changes nothing. A digest is in the CI log of the push, or
+`docker buildx imagetools inspect ghcr.io/rbalukja15/tenantiq-backend:sha-<commit>` prints it.
+
+The order is the point. Applying the whole render at once, as an earlier version of this page did,
+rolls the new API and worker while the migration is still running, so they start against a schema
+it has not reached yet and fail in ways that look like application bugs.
 
 ### 5. Verify
 
@@ -141,6 +161,38 @@ kubectl -n $NS logs deploy/tenantiq-backend --tail=50
 
 There is no `/healthz` yet, so the probes are TCP — a pod whose database is unreachable is still
 marked Ready. Read the logs on a first deploy rather than trusting green pods.
+
+## Continuous deployment
+
+`.github/workflows/ci.yml` releases on its own (#25, ADR-0022):
+
+- **On a pull request** it builds both images without pushing them, so a broken Dockerfile fails
+  the pull request that broke it.
+- **On a push to main** it pushes both as `sha-<commit>`. If both test jobs passed too, the `deploy`
+  job runs `scripts/deploy.py` with the digests it has just pushed, in the GitHub environment
+  `production`, one deploy at a time.
+- **Until `production` has a `KUBECONFIG` secret**, that job stops with a notice and stays green:
+  the images are published and nothing is deployed.
+
+To turn it on, once:
+
+1. **A cluster** with an ingress controller, cert-manager, and a storage class that provides
+   ReadWriteMany for the media volume (see "What will bite").
+2. **Postgres and Redis**: Postgres prepared as in section 3, and a Redis the pods can reach.
+3. **The namespace and `tenantiq-secrets`**, as in section 2.
+4. **Your domain** in `infra/k8s/overlays/prod`: the Ingress host, twice in `ingress.yaml`, and
+   `APP_BASE_URL` in `kustomization.yaml`. The deploy refuses to run while either still says
+   `example.com`, because the OIDC `redirect_uri` and the Origin check would name someone else's
+   domain. Point the domain's DNS at the ingress controller.
+5. **An environment named `production`** in the repository's Settings > Environments, with a secret
+   `KUBECONFIG` holding a kubeconfig for the cluster. Its credential has to create and update every
+   object a release contains, in the `tenantiq` namespace, and read `tenantiq-secrets`. A
+   protection rule on the environment (a required reviewer, a wait timer) applies to every deploy.
+
+The next merge to main deploys, and re-running a `deploy` job redeploys the digests it was given.
+
+The images are public because the repository is, and nothing secret is built into them. If the
+repository goes private, the cluster needs an image pull secret for `ghcr.io`.
 
 ## Dev overlay: running it
 
@@ -176,3 +228,9 @@ a consequence of the two constraints above, not a preference.
 **Nothing here runs Keycloak.** Each tenant brings its own IdP; the issuer is stored on the `Tenant`
 row and validated per request (ADR-0002). The local Keycloak in `docker-compose.yml` is a development
 fixture — see [auth-keycloak.md](auth-keycloak.md).
+
+**The Ingress is written for ingress-nginx, which upstream retired in March 2026** and no longer
+patches. Its annotations do three things the product needs, so another controller needs its own
+equivalent of each: no response buffering, without which a streamed answer arrives all at once at
+the end; a read timeout of 300 seconds, longer than an answer takes; and a 25 MiB request body, the
+upload cap.

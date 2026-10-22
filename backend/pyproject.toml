@@ -25,6 +25,10 @@ dependencies = [
     "dj-database-url>=2.1",
     "python-dotenv>=1.0",
     "pypdf>=4",
+    # The API's production server (#25, ADR-0022); compose keeps `runserver` for its autoreload.
+    # 26.1 is the floor because the image runs gunicorn as PID 1, and before 26.1 an orphaned
+    # process the kernel reparented onto it could exit with status 3 or 4 and halt the server.
+    "gunicorn>=26.1",
 ]
 
 [project.optional-dependencies]
