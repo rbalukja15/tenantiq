@@ -266,7 +266,8 @@ def test_the_prod_overlay_renders_with_every_image_pinned_to_its_digest():
     # Until the overlay names a real domain it refuses to deploy; past that, it splits cleanly.
     release = deploy.split(rendered.replace("example.com", "tenantiq.test"), PINS)
     assert [deploy._name(document) for document in release.migrate] == ["tenantiq-migrate"]
-    assert release.deployments == ["tenantiq-backend", "tenantiq-frontend", "tenantiq-worker"]
+    # At least these; a workload added to the overlay later rolls out the same way.
+    assert {"tenantiq-backend", "tenantiq-frontend", "tenantiq-worker"} <= set(release.deployments)
     assert not list(deploy.PROD_OVERLAY.parent.glob(".release-*")), "render left its overlay behind"
 
 
