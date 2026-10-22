@@ -1,7 +1,8 @@
 # Full local stack (#23): `docker compose up` brings up db + redis + ollama + the backend API +
-# the Celery ingestion worker + the frontend, so an uploaded document reaches READY through the
-# real worker and the real embedder. Keycloak stays behind the `dev` profile (auth is a separate
-# concern from the ingestion pipeline). `make dev` wraps this and seeds .env from .env.example.
+# the Celery ingestion worker and its beat scheduler + the frontend, so an uploaded document reaches
+# READY through the real worker and the real embedder. Keycloak stays behind the `dev` profile (auth
+# is a separate concern from the ingestion pipeline). `make dev` wraps this and seeds .env from
+# .env.example.
 #
 # Env: infra hostnames are set explicitly per service (containers talk over the compose network,
 # not localhost), while tunables/secrets interpolate from the repo-root .env (compose auto-loads it)
@@ -133,6 +134,20 @@ services:
         condition: service_completed_successfully
       ollama-pull:
         condition: service_completed_successfully
+
+  # Celery beat (#55): sends the periodic sweep that fails documents a dead worker left in
+  # PROCESSING. It runs no tasks itself, the worker does. One of it, ever: two schedulers would each
+  # send every entry. The schedule file goes to /tmp so it never lands in the mounted source tree.
+  beat:
+    build: ./backend
+    command:
+      ["celery", "-A", "config", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *backend-env
+    volumes:
+      - "./backend:/app"
+    depends_on:
+      redis:
+        condition: service_healthy
 
   frontend:
     build: ./frontend

@@ -1594,3 +1594,46 @@ whatever came out. `Chunk.embedding_model` has recorded the source since #12 and
 Retrieval now searches only the active model's chunks, so a stale corpus gets the honest "no
 relevant context" refusal, and `backfill_embeddings` re-embeds chunks from another model as well as
 the empty ones.
+
+## 2026-10-22 — M7 #55: the time limit was one of the kills
+
+ADR-0005 left one known hole: a worker killed between phase 1 and `on_failure` leaves its document
+PROCESSING forever, where the tenant sees work in progress and the retry endpoint refuses it. I filed
+#55 as a rare-event cleanup. **Reading Celery 5.6.3 to see which kills skip `on_failure` changed
+that.** The hook runs inside the pool process that executed the task, so anything that kills that
+process skips it: the OOM killer, a node drain, and the hard time limit itself. When #47's limit
+fires, the parent records the failure in the result backend and never calls the task's own handler,
+so the guard I added for a crafted upload strands the document of the upload it stops. A Kubernetes
+rollout also SIGKILLs the worker 30 seconds after SIGTERM while an ingestion may run for 300, so once
+#25 deploys every merge, every merge can strand whatever was being ingested at the time.
+
+I ran both halves for real, with Redis, a worker and beat, and the limits cut to seconds. An
+ingestion that swallowed its soft limit was killed at the hard one (`ForkPoolWorker-1 exited with
+signal 9 (SIGKILL)`), the log had no terminal-failure line because `on_failure` never ran, and the
+document sat in PROCESSING until the next sweep failed it with its reason four seconds later.
+
+**The fix is age, and the work was in proving the age is safe.** Every attempt stamps `updated_at`
+in phase 1 and the hard limit ends it, so during an attempt a document is never older than 300 s;
+between attempts it waits a few seconds of backoff and then for a free worker. Celery beat sends a
+sweep every 5 minutes that fails any PROCESSING document unchanged for 30. A system check refuses a
+threshold under twice the time limit, and since `migrate` runs the checks before it touches the
+database, a release carrying a bad value stops at its migrate Job before any pod changes. The first
+version of that test used `call_command("migrate")` and failed, because `call_command` skips the
+system checks unless told otherwise, so it said nothing about the command the Job runs. It now runs
+the real `manage.py migrate --check` in a subprocess.
+
+**A wrong reap heals itself, which is what makes a generous threshold a choice rather than a
+guess.** A retry that waits behind other ingestions for longer than the threshold is reaped, then
+its own phase 1 sets it back to PROCESSING and it finishes READY. If the tenant presses retry in
+between, the document is ingested twice, which ADR-0005's idempotent re-ingestion already absorbs.
+
+**The sweep is a new cross-tenant query path, so it runs one tenant at a time inside
+`tenant_context`.** One test shows a tenant's sweep leaving another tenant's stuck document alone. A
+Postgres-only test removes the ORM scope and shows row-level security alone still does, and with
+forced RLS switched off that test fails, reaping both documents, so it is testing the database and
+not the ORM. Beat is one replica with `Recreate`, pinned by a manifest test, because every running
+beat sends every entry, including the two that coexist for a moment during a rolling update.
+
+Left open: a document whose task was never published stays PENDING, which is a different failure
+with different evidence, and the worker's grace period is still shorter than an ingestion, so a
+rollout strands in-flight documents and the sweep recovers them half an hour later.
