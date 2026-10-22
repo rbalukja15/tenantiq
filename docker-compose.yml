@@ -31,6 +31,9 @@ x-backend-env: &backend-env
   VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
   TENANTIQ_VOYAGE_MODEL: ${TENANTIQ_VOYAGE_MODEL:-voyage-4}
   TENANTIQ_VOYAGE_TIMEOUT_SECONDS: ${TENANTIQ_VOYAGE_TIMEOUT_SECONDS:-30}
+  # The similarity floor that lets the product refuse (#88, ADR-0021). Empty means the settings
+  # default, 0.50, which was measured on mxbai-embed-large; another embedder needs its own value.
+  TENANTIQ_RETRIEVAL_MIN_SIMILARITY: ${TENANTIQ_RETRIEVAL_MIN_SIMILARITY:-}
 
 services:
   db:

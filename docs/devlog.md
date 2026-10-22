@@ -1594,3 +1594,40 @@ whatever came out. `Chunk.embedding_model` has recorded the source since #12 and
 Retrieval now searches only the active model's chunks, so a stale corpus gets the honest "no
 relevant context" refusal, and `backfill_embeddings` re-embeds chunks from another model as well as
 the empty ones.
+
+## 2026-10-22 — M6 #88: the refusal nobody could reach
+
+The similarity floor shipped at `0.0` in #14, with a note to raise it once the evaluation could say
+where. #21 said where, and also why `0.0` was never conservative: text embeddings score effectively
+always above it, so it dropped nothing, every tenant with a single chunk had "context" for every
+question, and the refusal that #15, #19 and ADR-0016 had built end to end could not happen in a
+default deployment.
+
+**The value is `0.50`, from the window already measured** on `mxbai-embed-large`, the default
+embedder: worst answerable question 0.567, best unanswerable 0.441. It sits 0.059 above the one and
+0.067 below the other. Production is the part I could not do from here. It runs `voyage-4`, whose
+window nobody has measured, and copying a floor across embedders is exactly what #88 warned
+against, so the prod overlay keeps `0.0` with the reason beside it until one `make eval` against
+Voyage provides a number (ADR-0021).
+
+**Raising the default broke eight tests, and quietly changed six more.** The eight were easy:
+"terms?" asked of a chunk reading "Net thirty days.", two texts with no word in common, which had
+passed only because the floor admitted anything. The six were the interesting ones, and nothing
+pointed at them. I found them by wrapping `_select_sources` for one run of the suite and listing
+every test in which the floor dropped a candidate. The usage-accounting test that injects a failing
+write kept passing because a refused question is never charged, so the failure it exists to inject
+never fired. The HTTP tenant-isolation test kept passing with nothing cited at all. Both now take a
+`no_similarity_floor` fixture, which is what they had always assumed; the isolation test in
+`test_rag.py` had already pinned `min_similarity=0.0` for the same reason.
+
+**The suite's embedder cannot calibrate anything**, which shaped the new tests. The hashing stand-in
+counts shared words, and on the evaluation dataset its gap is −0.33: "What is the capital of Peru?"
+scores 0.47 on stop words alone, higher than any answerable question. So the floor tests use
+questions that share no word with the corpus or nearly all of them, and the calibration itself is
+pinned separately: a test fails if the default leaves the measured window.
+
+`make eval` now exits 1 when the gap is not positive. At that point no floor can separate the
+questions, and that should stop a pipeline rather than sit in a table. One thing to remember next
+time faithfulness is measured: the published numbers were taken at `0.0`. Every in-corpus question
+still clears `0.50`, but any of its passages scoring under it no longer reaches the prompt, so the
+next run is not directly comparable with the last.

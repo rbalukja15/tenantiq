@@ -213,7 +213,9 @@ def test_usage_endpoint_is_rate_limited_on_the_read_budget(api, tenants, mint_to
 
 
 @requires_postgres
-def test_a_served_query_records_usage_for_the_tenant(api, tenants, mint_token, priced):
+def test_a_served_query_records_usage_for_the_tenant(
+    api, tenants, mint_token, priced, no_similarity_floor
+):
     # The row must be written even though the SSE body completes after the request transaction has
     # committed and the middleware cleared the tenant contextvar.
     acme, _ = tenants
@@ -237,7 +239,9 @@ def test_a_served_query_records_usage_for_the_tenant(api, tenants, mint_token, p
 
 
 @requires_postgres
-def test_recorded_usage_surfaces_through_the_usage_endpoint(api, tenants, mint_token, priced):
+def test_recorded_usage_surfaces_through_the_usage_endpoint(
+    api, tenants, mint_token, priced, no_similarity_floor
+):
     # End to end: query -> recorded -> reportable. This is what "knowing what a tenant costs" means.
     acme, _ = tenants
     _seed(acme, ["Net thirty days."])
@@ -277,7 +281,7 @@ def test_a_rejected_query_records_no_usage(api, tenants, mint_token, priced):
 
 @requires_postgres
 def test_accounting_failure_does_not_break_an_already_delivered_answer(
-    api, tenants, mint_token, priced, monkeypatch
+    api, tenants, mint_token, priced, monkeypatch, no_similarity_floor
 ):
     # Accounting runs at the tail of the response body, after every token has been sent. If the write
     # fails (DB down, misconfigured price), the client must still get its complete answer — losing a
@@ -370,7 +374,7 @@ class _FailsAfterOneTokenLLM:
 
 @requires_postgres
 def test_a_generation_that_produced_nothing_is_not_charged(
-    api, tenants, mint_token, priced, settings
+    api, tenants, mint_token, priced, settings, no_similarity_floor
 ):
     # A provider outage must not manufacture spend: with no tokens produced there is nothing to bill,
     # so a client retry loop during an outage cannot run up a bill for answers it never got.
@@ -388,7 +392,7 @@ def test_a_generation_that_produced_nothing_is_not_charged(
 
 @requires_postgres
 def test_a_generation_that_failed_after_emitting_tokens_is_charged_for_them(
-    api, tenants, mint_token, priced, settings
+    api, tenants, mint_token, priced, settings, no_similarity_floor
 ):
     # The other half: tokens that were produced were paid for, so they are recorded even though the
     # answer ended in an error.
@@ -449,7 +453,7 @@ def test_a_client_that_disconnects_midstream_is_still_charged(tenants, priced):
 
 @requires_postgres
 def test_usage_records_the_model_that_actually_served_the_answer(
-    api, tenants, mint_token, settings
+    api, tenants, mint_token, settings, no_similarity_floor
 ):
     # With no Anthropic key the local fallback serves the answer. Recording the configured Anthropic
     # model name (and its price) would report spend on a provider that served nothing.
