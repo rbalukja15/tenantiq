@@ -173,6 +173,14 @@ or the object-storage change above.
 **The rollout strategy is `Recreate` for both**, which means a short outage on every release. That is
 a consequence of the two constraints above, not a preference.
 
+**The prod overlay's similarity floor is `0.0`, which refuses nothing**, until `voyage-4` has been
+measured. `TENANTIQ_RETRIEVAL_MIN_SIMILARITY` is the only thing that lets the product decline a
+question its documents cannot answer, and the right value belongs to one embedder and one corpus
+(ADR-0021). The base's `0.50` was measured on `mxbai-embed-large`; copied to Voyage it could refuse
+questions the corpus answers. Run `make eval` with a `VOYAGE_API_KEY`, pick a value inside the window
+its "Similarity separation" section prints, and set it in the overlay. Re-run it when the corpus
+changes character: too low admits noise as evidence, too high refuses answerable questions.
+
 **Nothing here runs Keycloak.** Each tenant brings its own IdP; the issuer is stored on the `Tenant`
 row and validated per request (ADR-0002). The local Keycloak in `docker-compose.yml` is a development
 fixture — see [auth-keycloak.md](auth-keycloak.md).
