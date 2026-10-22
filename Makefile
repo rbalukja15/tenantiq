@@ -45,7 +45,7 @@ lock: ## Recompile backend/requirements*.lock from pyproject.toml (needs Docker;
 	   pip-compile $(PIP_COMPILE_FLAGS) --extra=dev --output-file=requirements-dev.lock pyproject.toml'
 	@echo "locks recompiled — review the diff, then 'make bootstrap' to install them"
 
-dev: ## Run the full stack locally (compose: db, redis, ollama, backend, worker, frontend)
+dev: ## Run the full stack locally (compose: db, redis, ollama, backend, worker, beat, frontend)
 	@[ -f .env ] || cp .env.example .env  # seed .env on first run so secrets/tunables take effect
 	docker compose up --build
 
