@@ -18,7 +18,7 @@ import math
 import pytest
 from django.db import connection
 
-from app.embeddings import get_embedder
+from app.embeddings import HashingEmbedder, get_embedder
 from app.models import Chunk, Document, Tenant
 from app.rag import Source, build_grounded_prompt, retrieve_context
 from app.tenant_context import tenant_context
@@ -74,7 +74,9 @@ def _seed_scored(tenant: Tenant, items: list[tuple[str, list[float]]]) -> Docume
                 start_offset=0,
                 end_offset=len(text),
                 embedding=vector,
-                embedding_model="test",
+                # The active model's name: retrieval only searches chunks it embedded (#53), and a
+                # foreign name would make every threshold test here pass on an empty retrieval.
+                embedding_model=get_embedder().model,
             )
     return doc
 
@@ -244,6 +246,26 @@ def test_threshold_keeps_only_chunks_that_clear_the_bar():
 
     assert [s.text for s in ctx.sources] == ["net thirty payment terms"]
     assert ctx.sources[0].similarity == pytest.approx(1.0, abs=1e-6)
+
+
+@requires_postgres
+def test_a_corpus_from_another_model_gets_the_no_context_refusal(settings):
+    """After a switch with no re-embed, the answer is a refusal rather than wrong passages (#53).
+
+    The corpus is identical to the question, so only the ``embedding_model`` check stands between
+    it and a similarity of 1.0.
+    """
+    a = _tenant("acme")
+    question = "quarterly invoice payment terms net thirty"
+    _seed(a, [question])
+    dim = settings.TENANTIQ_EMBEDDING_DIM
+    settings.TENANTIQ_EMBEDDER_FACTORY = lambda: HashingEmbedder(dim, model="another-model")
+
+    with tenant_context(a):
+        ctx = retrieve_context(question, k=3, min_similarity=0.0)
+
+    assert not ctx.has_context
+    assert ctx.sources == ()
 
 
 @requires_postgres

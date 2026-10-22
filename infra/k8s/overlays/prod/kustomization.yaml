@@ -12,18 +12,22 @@
 #   kubectl -n tenantiq create secret generic tenantiq-secrets \
 #     --from-literal=DATABASE_URL='postgresql://USER:PASS@HOST:5432/tenantiq' \
 #     --from-literal=DJANGO_SECRET_KEY="$(openssl rand -base64 48)" \
+#     --from-literal=VOYAGE_API_KEY='...' \
 #     --from-literal=ANTHROPIC_API_KEY='...'
 #
 # ...or from a secrets manager via External Secrets / Sealed Secrets. The trade-off of the unhashed
 # name is real and worth stating: rotating the Secret does NOT roll the pods, so a rotation has to be
 # followed by `kubectl rollout restart`. docs/deployment.md says so where someone will read it.
 #
-# UNFINISHED, deliberately, and both are named rather than implied:
-#   - the image this deploys as `frontend` is built from frontend/Dockerfile, whose CMD is
-#     `next dev`. A production image (`next build` + standalone output) belongs with #25.
-#   - TENANTIQ_LLM_FACTORY / TENANTIQ_EMBEDDER_FACTORY still default to the local Ollama backends,
-#     which do not exist in this namespace. #53 owns that decision; until it lands, this overlay
-#     renders correctly and would not answer a question.
+# UNFINISHED, deliberately, and named rather than implied: the image this deploys as `frontend` is
+# built from frontend/Dockerfile, whose CMD is `next dev`. A production image (`next build` +
+# standalone output) belongs with #25.
+#
+# Embeddings are settled (#53, ADR-0020): this overlay points the embedder at Voyage, which needs
+# VOYAGE_API_KEY in the Secret above. GENERATION is not, and the default here is deliberate — with no
+# ANTHROPIC_API_KEY the LLM factory falls back to Ollama, which does not run in this namespace, so a
+# query fails loudly instead of billing an account nobody meant to use. Set ANTHROPIC_API_KEY to
+# answer questions; leave it unset to deploy the ingestion half at zero marginal cost.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -54,6 +58,11 @@ configMapGenerator:
       # can. Left at the base default on purpose — the defensible value depends on the embedder #53
       # chooses, and guessing one here would look like a decision that has not been made.
       - TENANTIQ_RETRIEVAL_MIN_SIMILARITY=0.0
+      # Voyage, not the local Ollama backend, which does not run in this namespace (#53, ADR-0020).
+      # The key lives in `tenantiq-secrets`; without it the embedder raises before making a request,
+      # so a missing key is a clear configuration error rather than a vendor 401.
+      - TENANTIQ_EMBEDDER_FACTORY=app.embeddings.build_voyage_embedder
+      - TENANTIQ_VOYAGE_MODEL=voyage-4
   - name: tenantiq-frontend-config
     literals:
       - APP_BASE_URL=https://tenantiq.example.com

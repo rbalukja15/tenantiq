@@ -22,7 +22,13 @@ from django.conf import settings
 from django.utils import timezone
 
 from app.chunking import chunk_text
-from app.embeddings import EmbeddingDimensionError, embed_in_batches, get_embedder
+from app.embeddings import (
+    EmbeddingConfigurationError,
+    EmbeddingDimensionError,
+    EmbeddingRequestError,
+    embed_in_batches,
+    get_embedder,
+)
 from app.guardrails import redact_pii
 from app.models import Chunk, Document, Tenant
 from app.parsing import ParseError, extract_text
@@ -34,7 +40,16 @@ logger = logging.getLogger(__name__)
 MAX_ERROR_LENGTH = 2000
 
 # A soft-limit hit means the work is too heavy for the shared worker — permanent, no retry (#47).
-PERMANENT_FAILURES = (ParseError, EmbeddingDimensionError, SoftTimeLimitExceeded)
+# So is an embedder that cannot run as configured (no key, a rejected key) or whose provider refuses
+# the request outright (#53): every attempt hits the same wall, and a hosted embedder would bill each
+# retry for the batches that had already succeeded.
+PERMANENT_FAILURES = (
+    ParseError,
+    EmbeddingDimensionError,
+    EmbeddingConfigurationError,
+    EmbeddingRequestError,
+    SoftTimeLimitExceeded,
+)
 
 
 def _user_safe_message(exc: BaseException) -> str:
@@ -118,7 +133,8 @@ def run_ingestion(document_id: int, tenant_id) -> None:
             )
         except PERMANENT_FAILURES as exc:
             # Permanent failures: an unreadable/empty/oversized file, a static mis-configuration (a
-            # model whose vectors don't match TENANTIQ_EMBEDDING_DIM), or a soft-limit hit (#47).
+            # model whose vectors don't match TENANTIQ_EMBEDDING_DIM, a missing or rejected embedding
+            # key), a request the embedding provider refuses (#53), or a soft-limit hit (#47).
             # A retry would only hit the same wall, so record the reason and stop. The tenant sees a
             # sanitized message; the raw exception goes to the server log only.
             logger.warning(

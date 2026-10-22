@@ -1452,7 +1452,7 @@ regression in *rendering* would slip past, because this is HTTP-level by design.
 No new unit tests — the artifact is a script, and its test is the revert-check above. 416 backend
 tests unchanged.
 
-## 2026-08-24 — M6 #24: the manifests would have had to lie
+## 2026-08-26 — M6 #24: the manifests would have had to lie
 
 Base manifests plus `dev` and `prod` Kustomize overlays. Writing them is mostly mechanical; the
 useful part was not. **A manifest is an executable claim about what the system can do**, and three of
@@ -1506,3 +1506,91 @@ Nothing here has been applied to a real cluster. These manifests are verified to
 satisfy their invariants, which is not the same as verified to run, and the ADR says so.
 
 431 backend tests, up from 416.
+
+## 2026-08-26 — M6 #53: one dimension, and the harness paying for itself
+
+Production embeddings are Voyage AI (`voyage-4`). The decision that mattered was not which vendor —
+it was that **`voyage-4` emits 256/512/1024/2048 and cannot emit 768**, which is what the local
+`nomic-embed-text` produced.
+
+Two widths sounded survivable and is not. `Chunk.embedding` is
+`VectorField(dimensions=settings.TENANTIQ_EMBEDDING_DIM)`, so the width is serialized into a
+migration: a 768 dev and a 1024 prod means the migration history describes a schema neither
+environment has, and CI's `makemigrations --check` becomes a check on which `.env` the runner
+happened to have. So one width everywhere — 1024 — and the local model moves to `mxbai-embed-large`,
+which emits it.
+
+**Then the retrieval metrics did the job they were built for.** #22's harness had already earned its
+keep by surfacing the context-window bug in #90, but that was a defect falling out of a run. This is
+the other thing an evaluation is for: the model change was forced by a dimension constraint, not
+chosen for quality, so I re-ran #21 expecting to record a regression and argue it was worth it:
+
+| Metric   | `nomic-embed-text` (768) | `mxbai-embed-large` (1024) |
+| -------- | ------------------------ | -------------------------- |
+| hit@1    | 0.56                     | **0.83**                   |
+| recall@3 | 0.94                     | **1.00**                   |
+| MRR      | 0.75                     | **0.91**                   |
+
+The previous entry's finding — *"the right passage is always in the top 3, but only the single best
+match a little over half the time"* — is largely gone, and the reranking step I argued for a week ago
+is a much weaker case now. Without the dataset this would have been an unmeasurable shrug: a forced
+change, shipped on the assumption that a bigger model is probably fine.
+
+One number moved the other way, which is the more interesting half: the separation gap between
+answerable and unanswerable questions **narrowed**, +0.155 → +0.126, while every ranking metric
+improved. A better embedder pulls related text closer together, which helps ranking and tightens the
+refusal boundary. Ranking better and refusing better are not the same property, and #88 inherits the
+tighter window.
+
+**Migration 0014 clears the old vectors with DDL, not an UPDATE**, and that is the detail I would
+have got wrong by instinct. `app_chunk` has FORCE'd row-level security and a migration runs with no
+`app.current_tenant` GUC, so `UPDATE app_chunk SET embedding = NULL` matches **zero rows and succeeds
+silently** — leaving every 768-dim vector in place for the `ALTER` to choke on. RLS governs DML, not
+DDL. Verified against a real database with a real 768-dim row rather than reasoned about: the UPDATE
+reported `UPDATE 0`, and `ALTER TABLE ... TYPE vector USING NULL` cleared it. Same trap that bit the
+eval harness's cleanup in #21, arriving from a third direction.
+
+**The dimension guard from #46 fired for real**, which was satisfying: the first eval run aborted
+with *"returned a 768-dim vector but TENANTIQ_EMBEDDING_DIM=1024"* because `.env` still pinned
+`nomic-embed-text` and `load_dotenv` does not override. That is a guard doing exactly its job — a
+loud stop instead of a corpus of vectors the column would reject one row at a time.
+
+**Cost control is a default, not a policy.** Embeddings are one-off per document and Voyage's free
+grant is 200M tokens against a corpus of ~8k, so the embedding bill is zero. Generation is per query
+and unbounded, so `ANTHROPIC_API_KEY` ships **unset**: the factory falls back to Ollama, which does
+not exist in the prod namespace, so a misconfigured deploy fails loudly instead of billing an account
+nobody meant to use. Setting the key is a deliberate act. Ollama also stays the *default* embedder —
+a fresh clone must cost nothing, so spending money is never the path of least resistance.
+
+Last one, found by running it: the local stack started returning *"Answer generation failed"* on every
+question, with an HTTP 500 and `llama-server process has terminated: signal: killed` underneath. Not
+a code bug — the OOM killer. The new embedding model is 669 MB against nomic's 274 MB, and Ollama
+keeps recently-used models resident, so llama3.1 at `num_ctx=8192` plus a resident embedder exceeds a
+default ~8 GB Docker VM. `OLLAMA_MAX_LOADED_MODELS: 1` in compose evicts instead, at the cost of a
+reload between phases. Nothing about the error message pointed at memory, which is why it is written
+down here.
+
+Re-running #22 on the new retrieval moved everything in the same direction — grounded 0.36 -> 0.49,
+citation coverage 0.50 -> 0.64, uncited figures 18 -> 8, still zero invented citations, and 18 of 18
+answers measured rather than 17. Only retrieval changed between the runs.
+
+**But the sharpest result of the day is one no score reported.** Asked about late-payment interest,
+the old answer quoted the MSA — *"one percent (1%) per month"* — and the new one quotes **0.75%**,
+from Amendment No. 2, which reduced the rate. The old answer was **wrong, and its faithfulness score
+was fine**: it quoted its cited source verbatim, so a judge asking "is this claim supported by the
+text it cites?" has to say yes. Faithfulness measures support-by-cited-source, not
+correctness-in-context, and a contract corpus is mostly documents that supersede one another. I found
+it by reading two source files because a number looked odd. Nothing in the harness would have.
+
+**These are not the production numbers.** They were measured on the local model that happens to share
+Voyage's width; matching widths is not matching geometry. `make eval` with a `VOYAGE_API_KEY` gets
+the real ones, and #88's floor has to come from that run. Every report is stamped with the embedder
+that produced it precisely so the two can never be confused.
+
+**One width also means a provider switch is silent**, and review caught it. The #46 guard compares
+widths, so after moving from `mxbai-embed-large` to `voyage-4` without re-embedding, queries would
+have ranked the old corpus by distances between two unrelated spaces, and answered confidently from
+whatever came out. `Chunk.embedding_model` has recorded the source since #12 and nothing read it.
+Retrieval now searches only the active model's chunks, so a stale corpus gets the honest "no
+relevant context" refusal, and `backfill_embeddings` re-embeds chunks from another model as well as
+the empty ones.

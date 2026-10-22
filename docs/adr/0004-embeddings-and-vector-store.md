@@ -1,7 +1,14 @@
 # ADR-0004 — Embeddings & vector store
 
-- **Status:** Accepted
+- **Status:** Accepted; the model and dimension choices below are superseded by
+  [ADR-0020](0020-production-embedding-and-llm-providers.md) (#53)
 - **Date:** 2026-06-30
+
+> **What changed.** This ADR chose `nomic-embed-text` at **768** dimensions. Production embeddings
+> are now Voyage `voyage-4` at **1024**, with `mxbai-embed-large` locally, because `voyage-4` cannot
+> emit 768. Everything else here still holds — the pluggable factory, the fixed-width constraint, the
+> HNSW index, and the reasoning about why changing the model means a migration plus a re-backfill.
+> ADR-0020 is that reasoning being cashed in.
 
 ## Context
 

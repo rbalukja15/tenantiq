@@ -13,7 +13,7 @@ import math
 import pytest
 from django.db import connection
 
-from app.embeddings import get_embedder
+from app.embeddings import HashingEmbedder, get_embedder
 from app.models import Chunk, Document, Tenant
 from app.retrieval import nearest_chunks
 from app.tenant_context import tenant_context
@@ -71,7 +71,8 @@ def _seed_vectors(tenant: Tenant, vectors: list[list[float]]) -> None:
                 text=f"chunk-{i}",
                 char_count=7,
                 embedding=vector,
-                embedding_model="test",
+                # The active model's name: retrieval only searches chunks it embedded (#53).
+                embedding_model=get_embedder().model,
             )
 
 
@@ -113,6 +114,49 @@ def test_vector_search_cannot_leak_across_tenants():
     assert results  # B has a chunk of its own...
     assert all(chunk.tenant_id == b.id for chunk in results)  # ...but never A's
     assert all("Acme" not in chunk.text for chunk in results)
+
+
+@requires_postgres
+def test_nearest_chunks_skips_chunks_embedded_by_another_model():
+    """Two models of one width embed into spaces the column cannot tell apart (#53).
+
+    Their vectors fit the column and compare without error, so only ``embedding_model`` separates
+    them. Both chunks here carry the *same* vector, an exact match for the query, so the filter is
+    the only thing that can leave the foreign one out.
+    """
+    a = _tenant("acme")
+    embedder = get_embedder()
+    text = "Invoice payment terms are net thirty days after receipt."
+    with tenant_context(a):
+        doc = Document.objects.create(title="doc")
+        for i, model in enumerate([embedder.model, "another-model"]):
+            Chunk.objects.create(
+                document=doc,
+                index=i,
+                text=text,
+                char_count=len(text),
+                embedding=embedder.embed_query(text),
+                embedding_model=model,
+            )
+        results = nearest_chunks(text, k=5)
+
+    assert [chunk.embedding_model for chunk in results] == [embedder.model]
+
+
+@requires_postgres
+def test_nearest_chunks_finds_nothing_after_a_switch_to_another_model(settings):
+    """A corpus nobody re-ingested after a provider switch fails closed rather than answering (#53).
+
+    The hashing embedder's vectors do not depend on its model name, so the corpus would be a perfect
+    match for the new embedder's queries if the name were not checked.
+    """
+    a = _tenant("acme")
+    _seed(a, ["Invoice payment terms are net thirty days after receipt."])
+    dim = settings.TENANTIQ_EMBEDDING_DIM
+    settings.TENANTIQ_EMBEDDER_FACTORY = lambda: HashingEmbedder(dim, model="another-model")
+
+    with tenant_context(a):
+        assert nearest_chunks("Invoice payment terms are net thirty days after receipt.") == []
 
 
 @requires_postgres
@@ -181,6 +225,7 @@ def _search_without_iterative_scan(query: str, k: int) -> list[Chunk]:
             cursor.execute("SET LOCAL hnsw.iterative_scan = off")
         return list(
             Chunk.objects.exclude(embedding=None)
+            .filter(embedding_model=get_embedder().model)
             .annotate(distance=CosineDistance("embedding", vector))
             .order_by("distance")[:k]
         )

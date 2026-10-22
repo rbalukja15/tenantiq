@@ -188,21 +188,33 @@ TENANTIQ_REDACT_PII = _env_bool("TENANTIQ_REDACT_PII", True)
 TENANTIQ_CHUNK_TARGET_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_TARGET_TOKENS", "800"))
 TENANTIQ_CHUNK_OVERLAP_TOKENS = int(os.environ.get("TENANTIQ_CHUNK_OVERLAP_TOKENS", "100"))
 
-# Embeddings + vector store (ADR-0004, #12). The embedder is pluggable like the token verifier: a
-# deterministic, dependency-free hashing embedder under pytest (no network/secrets), Ollama otherwise.
-# DIM is fixed because the pgvector column + index need a fixed width; changing the model means a
-# migration plus a re-backfill (manage.py backfill_embeddings).
-TENANTIQ_EMBEDDING_DIM = int(os.environ.get("TENANTIQ_EMBEDDING_DIM", "768"))
-TENANTIQ_EMBEDDING_MODEL = os.environ.get("TENANTIQ_EMBEDDING_MODEL", "nomic-embed-text")
+# Embeddings + vector store (ADR-0004, #12; provider chosen in #53/ADR-0020). The embedder is
+# pluggable like the token verifier: a deterministic, dependency-free hashing embedder under pytest
+# (no network/secrets), Ollama by default, Voyage in production via TENANTIQ_EMBEDDER_FACTORY.
+#
+# DIM is 1024 and is the same number everywhere on purpose. The pgvector column and its HNSW index
+# are a fixed width baked into a migration, so the repo cannot hold a 768-dim dev and a 1024-dim
+# prod without the migration history describing a schema neither environment has. `voyage-4` and
+# `mxbai-embed-large` both emit 1024, which is what makes one width serve both. Changing it means a
+# migration plus a full re-backfill (manage.py backfill_embeddings) — see docs/deployment.md.
+TENANTIQ_EMBEDDING_DIM = int(os.environ.get("TENANTIQ_EMBEDDING_DIM", "1024"))
+# The LOCAL (Ollama) embedding model. nomic-embed-text is 768-dim and no longer fits the column.
+TENANTIQ_EMBEDDING_MODEL = os.environ.get("TENANTIQ_EMBEDDING_MODEL", "mxbai-embed-large")
 TENANTIQ_EMBED_BATCH_SIZE = int(os.environ.get("TENANTIQ_EMBED_BATCH_SIZE", "64"))
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-TENANTIQ_EMBEDDER_FACTORY = os.environ.get(
-    "TENANTIQ_EMBEDDER_FACTORY",
-    (
-        "app.embeddings.build_fake_embedder"
-        if "pytest" in sys.modules
-        else "app.embeddings.build_default_embedder"
-    ),
+
+# Voyage AI — the hosted embedding provider (#53, ADR-0020). Named TENANTIQ_VOYAGE_MODEL rather than
+# reusing TENANTIQ_EMBEDDING_MODEL: that name already means "the Ollama model" in every existing
+# .env, and silently repurposing a documented variable is worse than an inconsistent one.
+VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
+TENANTIQ_VOYAGE_MODEL = os.environ.get("TENANTIQ_VOYAGE_MODEL", "voyage-4")
+TENANTIQ_VOYAGE_TIMEOUT_SECONDS = float(os.environ.get("TENANTIQ_VOYAGE_TIMEOUT_SECONDS", "30"))
+# Empty counts as unset (`or`, not a get() default): compose forwards this as `${...:-}`, and an
+# empty string would otherwise be imported as a dotted path and fail every ingestion and query.
+TENANTIQ_EMBEDDER_FACTORY = os.environ.get("TENANTIQ_EMBEDDER_FACTORY") or (
+    "app.embeddings.build_fake_embedder"
+    if "pytest" in sys.modules
+    else "app.embeddings.build_default_embedder"
 )
 
 # RAG query engine — retrieval + prompt assembly (M3, #14). Tuned like the chunking knobs.
