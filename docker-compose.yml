@@ -135,7 +135,11 @@ services:
         condition: service_completed_successfully
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      # The Dockerfile's default target is the production image (#25), which bakes a build and has
+      # no dev server. The dev stack mounts the source and wants `next dev`.
+      target: dev
     environment:
       # Server-side only (ADR-0013 §1): the browser never calls Django directly, so this is the
       # *in-network* address the Next server uses — deliberately not localhost, and deliberately not

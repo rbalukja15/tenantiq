@@ -71,6 +71,10 @@ prod overlay deploys whatever image it is given, so it is production-grade only 
 image exists. That belongs with #25 and is written at the top of `frontend.yaml` rather than
 discovered in an incident.
 
+> **Resolved by #25 (ADR-0022).** The frontend image is now Next's standalone server, and the API,
+> which ran `manage.py runserver` here too, runs gunicorn. The release order these manifests could
+> not express is `scripts/deploy.py`.
+
 Shipping `replicas: 3` would have looked more professional and been a lie. Two of these three are
 invisible from compose, which is exactly why writing the manifests was worth doing before there was a
 cluster to run them on.
