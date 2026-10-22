@@ -82,6 +82,15 @@ def _isolate_tenant_context():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_log_context():
+    """Start every test with no log fields, and drop whatever it bound (#26)."""
+    from app.log_context import log_scope
+
+    with log_scope():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_throttle_cache():
     """Reset the throttle/quota cache between tests (#49).
 

@@ -171,6 +171,24 @@ def run_ingestion(document_id: int, tenant_id) -> None:
         doc.status = Document.Status.READY
         doc.save(update_fields=["status", "updated_at"])
 
+    # Logged after the block, which on Postgres is phase 2's transaction, so the line follows the
+    # commit and never reports READY for a document a failed commit left PROCESSING (#26). How long
+    # it took is on the task's own "succeeded in" line, which carries the same request id.
+    logger.info(
+        "Ingested document %s (tenant %s): %d chunks on attempt %d.",
+        document_id,
+        tenant_id,
+        len(pieces),
+        doc.attempts,
+        extra={
+            "event": "ingestion",
+            "document_id": document_id,
+            "chunks": len(pieces),
+            "attempt": doc.attempts,
+            "embedding_model": embedder.model,
+        },
+    )
+
 
 def mark_ingestion_failed(document_id: int, tenant_id, exc: BaseException) -> None:
     """Record a *terminal* ingestion failure so it is observable (issue #13), with the raw exception

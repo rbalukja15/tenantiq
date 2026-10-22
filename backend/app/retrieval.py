@@ -6,15 +6,25 @@ stays small — embed the query, order the tenant's chunks by cosine distance, r
 Tenant isolation is automatic and load-bearing: ``Chunk.objects`` is the tenant-scoped manager
 (ADR-0002, Layer 1), so a search can only ever see the active tenant's chunks — and Postgres RLS
 (Layer 2) backs that at the database. Callers must run inside a ``tenant_context``.
+
+Each search logs one line (#26, ADR-0024): the model that embedded the query, how many chunks came
+back, and the time spent embedding and searching, so a slow answer can be traced to the provider or
+the index. Never the query itself.
 """
 
 from __future__ import annotations
+
+import logging
+import time
 
 from django.db import connection
 from pgvector.django import CosineDistance
 
 from app.embeddings import get_embedder
+from app.log_context import ms_since
 from app.models import Chunk
+
+logger = logging.getLogger(__name__)
 
 
 def nearest_chunks(query: str, k: int = 5) -> list[Chunk]:
@@ -26,8 +36,10 @@ def nearest_chunks(query: str, k: int = 5) -> list[Chunk]:
     search would return confident neighbours from the wrong one. Filtering on ``embedding_model``
     turns that into no results, which the caller already answers as "no relevant context".
     """
+    started = time.perf_counter()
     embedder = get_embedder()
     query_vector = embedder.embed_query(query)
+    embed_ms = ms_since(started)
     _enable_iterative_index_scan()
     chunks = list(
         Chunk.objects.exclude(embedding=None)
@@ -39,6 +51,22 @@ def nearest_chunks(query: str, k: int = 5) -> list[Chunk]:
     # survivors can come back slightly out of order. Re-rank them by their true distance — cheap at
     # this k — to keep the "nearest first" contract exact.
     chunks.sort(key=lambda chunk: chunk.distance)
+    duration_ms = ms_since(started)
+    logger.info(
+        "retrieved %d of %d chunks in %d ms",
+        len(chunks),
+        k,
+        duration_ms,
+        extra={
+            "event": "retrieval",
+            "embedding_model": embedder.model,
+            "k": k,
+            "candidates": len(chunks),
+            "embed_ms": embed_ms,
+            "search_ms": duration_ms - embed_ms,
+            "duration_ms": duration_ms,
+        },
+    )
     return chunks
 
 
