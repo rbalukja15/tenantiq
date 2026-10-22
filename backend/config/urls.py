@@ -10,6 +10,7 @@ from app.views import (
     MeView,
     QueryView,
     TenantDiscoveryView,
+    UsageDailyView,
     UsageView,
 )
 
@@ -26,4 +27,6 @@ urlpatterns = [
     path("api/chunks/<int:pk>", ChunkDetailView.as_view(), name="chunk-detail"),
     path("api/query", QueryView.as_view(), name="query"),
     path("api/usage", UsageView.as_view(), name="usage"),
+    # The same spend, day by day, for the usage dashboard's charts (#27, ADR-0025).
+    path("api/usage/daily", UsageDailyView.as_view(), name="usage-daily"),
 ]

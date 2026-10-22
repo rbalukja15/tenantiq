@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import styles from "./AppNav.module.css";
 
 /**
- * The signed-in area's two surfaces (#20).
+ * The signed-in area's surfaces (#20; usage added in #27).
  *
  * `aria-current="page"` is the load-bearing part, not the underline. The active tab is otherwise
  * distinguished only by colour and weight, which WCAG 1.4.1 does not accept as the sole carrier of
@@ -18,6 +18,7 @@ import styles from "./AppNav.module.css";
 const LINKS = [
   { href: "/", label: "Ask" },
   { href: "/documents", label: "Documents" },
+  { href: "/usage", label: "Usage" },
 ] as const;
 
 export function AppNav() {
