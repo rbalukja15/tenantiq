@@ -46,8 +46,8 @@ and runs the API with `runserver` instead, for their autoreload.
 
 ### 2. Create the namespace and the Secret (prod only)
 
-Never in git. Five keys, consumed by the backend, the worker and the migrate Job, in a namespace
-that has to exist first:
+Never in git. Five keys, consumed by the backend, the worker, beat and the migrate Job, in a
+namespace that has to exist first:
 
 ```bash
 kubectl create namespace tenantiq
@@ -79,8 +79,9 @@ External Secrets or Sealed Secrets work the same way as long as the resulting Se
 
 > **Rotating this Secret does not restart anything.** It is referenced by a fixed name with no
 > content hash — the price of not generating it from the repo — so a rotation must be followed by
-> `kubectl -n tenantiq rollout restart deploy/tenantiq-backend deploy/tenantiq-worker`. The
-> ConfigMap *is* generated and hashed, so config changes roll the pods on their own.
+> `kubectl -n tenantiq rollout restart deploy/tenantiq-backend deploy/tenantiq-worker
+> deploy/tenantiq-beat`. The ConfigMap *is* generated and hashed, so config changes roll the pods
+> on their own.
 
 ### 3. The database must be prepared before the first deploy
 
@@ -217,6 +218,13 @@ so replicas multiply writers on one filesystem. Both want a code change first �
 store, and object storage for uploads. A test fails if the numbers are raised, so that the person
 raising them reads this.
 
+**`tenantiq-beat` is one replica with the `Recreate` strategy, and must stay that way.** It is
+Celery's scheduler (#55, ADR-0023): every running copy sends every scheduled entry, so two of them,
+including the overlap a rolling update would create, double the schedule. Its one entry today is
+the sweep that fails documents a dead worker left in PROCESSING, tuned by
+`TENANTIQ_INGEST_REAP_AFTER_SECONDS` and `TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS`. The migrate Job
+refuses a threshold under twice `TENANTIQ_INGEST_TIME_LIMIT`, so a release carrying one stops there.
+
 **`tenantiq-media` is ReadWriteMany.** Most cloud block storage is ReadWriteOnce. On a single-node
 dev cluster the overlay patches it down to RWO, which works only because every pod lands on the same
 node. On a managed cluster you need a filesystem that provides RWX (EFS, Azure Files, Filestore) —
@@ -224,6 +232,14 @@ or the object-storage change above.
 
 **The rollout strategy is `Recreate` for both**, which means a short outage on every release. That is
 a consequence of the two constraints above, not a preference.
+
+**The prod overlay's similarity floor is `0.0`, which refuses nothing**, until `voyage-4` has been
+measured. `TENANTIQ_RETRIEVAL_MIN_SIMILARITY` is the only thing that lets the product decline a
+question its documents cannot answer, and the right value belongs to one embedder and one corpus
+(ADR-0021). The base's `0.50` was measured on `mxbai-embed-large`; copied to Voyage it could refuse
+questions the corpus answers. Run `make eval` with a `VOYAGE_API_KEY`, pick a value inside the window
+its "Similarity separation" section prints, and set it in the overlay. Re-run it when the corpus
+changes character: too low admits noise as evidence, too high refuses answerable questions.
 
 **Nothing here runs Keycloak.** Each tenant brings its own IdP; the issuer is stored on the `Tenant`
 row and validated per request (ADR-0002). The local Keycloak in `docker-compose.yml` is a development

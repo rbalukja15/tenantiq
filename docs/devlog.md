@@ -1595,6 +1595,181 @@ Retrieval now searches only the active model's chunks, so a stale corpus gets th
 relevant context" refusal, and `backfill_embeddings` re-embeds chunks from another model as well as
 the empty ones.
 
+## 2026-10-22 — M6 #88: the refusal nobody could reach
+
+The similarity floor shipped at `0.0` in #14, with a note to raise it once the evaluation could say
+where. #21 said where, and also why `0.0` was never conservative: text embeddings score effectively
+always above it, so it dropped nothing, every tenant with a single chunk had "context" for every
+question, and the refusal that #15, #19 and ADR-0016 had built end to end could not happen in a
+default deployment.
+
+**The value is `0.50`, from the window already measured** on `mxbai-embed-large`, the default
+embedder: worst answerable question 0.567, best unanswerable 0.441. It sits 0.059 above the one and
+0.067 below the other. Production is the part I could not do from here. It runs `voyage-4`, whose
+window nobody has measured, and copying a floor across embedders is exactly what #88 warned
+against, so the prod overlay keeps `0.0` with the reason beside it until one `make eval` against
+Voyage provides a number (ADR-0021).
+
+**Raising the default broke eight tests, and quietly changed six more.** The eight were easy:
+"terms?" asked of a chunk reading "Net thirty days.", two texts with no word in common, which had
+passed only because the floor admitted anything. The six were the interesting ones, and nothing
+pointed at them. I found them by wrapping `_select_sources` for one run of the suite and listing
+every test in which the floor dropped a candidate. The usage-accounting test that injects a failing
+write kept passing because a refused question is never charged, so the failure it exists to inject
+never fired. The HTTP tenant-isolation test kept passing with nothing cited at all. Both now take a
+`no_similarity_floor` fixture, which is what they had always assumed; the isolation test in
+`test_rag.py` had already pinned `min_similarity=0.0` for the same reason.
+
+**The suite's embedder cannot calibrate anything**, which shaped the new tests. The hashing stand-in
+counts shared words, and on the evaluation dataset its gap is −0.33: "What is the capital of Peru?"
+scores 0.47 on stop words alone, higher than any answerable question. So the floor tests use
+questions that share no word with the corpus or nearly all of them, and the calibration itself is
+pinned separately: a test fails if the default leaves the measured window.
+
+`make eval` now exits 1 when the gap is not positive. At that point no floor can separate the
+questions, and that should stop a pipeline rather than sit in a table. One thing to remember next
+time faithfulness is measured: the published numbers were taken at `0.0`. Every in-corpus question
+still clears `0.50`, but any of its passages scoring under it no longer reaches the prompt, so the
+next run is not directly comparable with the last.
+
+## 2026-10-22 — M7 #55: the time limit was one of the kills
+
+ADR-0005 left one known hole: a worker killed between phase 1 and `on_failure` leaves its document
+PROCESSING forever, where the tenant sees work in progress and the retry endpoint refuses it. I filed
+#55 as a rare-event cleanup. **Reading Celery 5.6.3 to see which kills skip `on_failure` changed
+that.** The hook runs inside the pool process that executed the task, so anything that kills that
+process skips it: the OOM killer, a node drain, and the hard time limit itself. When #47's limit
+fires, the parent records the failure in the result backend and never calls the task's own handler,
+so the guard I added for a crafted upload strands the document of the upload it stops. A Kubernetes
+rollout also SIGKILLs the worker 30 seconds after SIGTERM while an ingestion may run for 300, so once
+#25 deploys every merge, every merge can strand whatever was being ingested at the time.
+
+I ran both halves for real, with Redis, a worker and beat, and the limits cut to seconds. An
+ingestion that swallowed its soft limit was killed at the hard one (`ForkPoolWorker-1 exited with
+signal 9 (SIGKILL)`), the log had no terminal-failure line because `on_failure` never ran, and the
+document sat in PROCESSING until the next sweep failed it with its reason four seconds later.
+
+**The fix is age, and the work was in proving the age is safe.** Every attempt stamps `updated_at`
+in phase 1 and the hard limit ends it, so during an attempt a document is never older than 300 s;
+between attempts it waits a few seconds of backoff and then for a free worker. Celery beat sends a
+sweep every 5 minutes that fails any PROCESSING document unchanged for 30. A system check refuses a
+threshold under twice the time limit, and since `migrate` runs the checks before it touches the
+database, a release carrying a bad value stops at its migrate Job before any pod changes. The first
+version of that test used `call_command("migrate")` and failed, because `call_command` skips the
+system checks unless told otherwise, so it said nothing about the command the Job runs. It now runs
+the real `manage.py migrate --check` in a subprocess.
+
+**A wrong reap heals itself, which is what makes a generous threshold a choice rather than a
+guess.** A retry that waits behind other ingestions for longer than the threshold is reaped, then
+its own phase 1 sets it back to PROCESSING and it finishes READY. If the tenant presses retry in
+between, the document is ingested twice, which ADR-0005's idempotent re-ingestion already absorbs.
+
+**The sweep is a new cross-tenant query path, so it runs one tenant at a time inside
+`tenant_context`.** One test shows a tenant's sweep leaving another tenant's stuck document alone. A
+Postgres-only test removes the ORM scope and shows row-level security alone still does, and with
+forced RLS switched off that test fails, reaping both documents, so it is testing the database and
+not the ORM. Beat is one replica with `Recreate`, pinned by a manifest test, because every running
+beat sends every entry, including the two that coexist for a moment during a rolling update.
+
+Left open: a document whose task was never published stays PENDING, which is a different failure
+with different evidence, and the worker's grace period is still shorter than an ingestion, so a
+rollout strands in-flight documents and the sweep recovers them half an hour later.
+
+## 2026-10-22 — M7 #26: the tracebacks went nowhere
+
+#26 asks for logs that let you follow one request end to end. **Before writing any, I checked what
+the logs said today, and in a deployment a server error said nothing.** With no `LOGGING` setting,
+Django sends `django.request` errors to a console handler that only prints under DEBUG, and to
+`mail_admins`, which has no admins to mail. Because that chain is not empty, Python's last-resort
+handler never runs either. So with DEBUG off, which is every deployment, a 500's traceback was
+printed nowhere. The app's own INFO lines were dropped as well, and its warnings printed as a bare
+message with no time, level or logger.
+
+**One `ContextVar` holds the fields, and a filter on the one handler copies them onto every
+record**, so Django's, Celery's and the SDKs' lines carry the request id and the tenant without
+knowing about either. The middleware opens a scope per request, the authenticator adds the tenant,
+and a Celery task runs inside the fields of the request that queued it: they travel in a message
+header, come back at `task_prerun`, and survive a retry because Celery republishes the headers. The
+answer path gained one line each for the search, the similarity floor and the generation. The floor
+line carries the best score, which is the number that explains a refusal, and the generation line
+says how the answer ended, which model gave it, the time to first token, and the same token
+estimates the usage row is charged with. None of them carries a question, an answer or a passage;
+T15 in the threat model says why.
+
+**The streamed answer was the hard part, and my first version was wrong in a way production would
+not have shown.** The body runs after the middleware has returned, so the middleware wraps it. I
+first set the fields at the first frame and held them to the last, which covered a client that
+hangs up: Django closes the view's own generator before the wrapper, so the view's cleanup, the
+usage row and the generation line, runs while the wrapper is still suspended. But two answers
+iterated in turn on one thread then swap fields, and a test that interleaves two tenants' answers,
+as the usage tests already do, showed the first answer's generation line logged under the second's
+request and tenant. Gunicorn's threads send one response at a time, so production would not have
+hit it; the test client did. Now each frame is produced inside its request's fields, which are
+reset before the frame is sent, and the response's whole `close()` runs inside them, since that is
+where a hang-up is cleaned up.
+
+Three smaller things came out of the tests. Django logs a 4xx that a view returned only after the
+whole middleware chain has returned, so that line had no request id; the middleware now leaves the
+fields on the request, and the filter reads them off the record. The Celery tests passed alone and
+failed in the full suite, because the first eager `delay()` anywhere builds the app's producer pool
+against Redis and keeps it, so a later publish meant for the in-memory broker went to Redis instead.
+And reading the Anthropic SDK showed it logs each request whole at DEBUG, prompt and passages
+included, so `TENANTIQ_LOG_LEVEL=DEBUG` would have copied tenant content into the logs. Django's
+loggers and the SDK's now stop at INFO, and a test shows it.
+
+I ran it for real with gunicorn, Redis and a worker. An upload's request line in the API's log and
+its ingestion and `succeeded` lines in the worker's share the request id and the tenant, and a
+query's search, floor, generation and request lines follow in order. `docs/observability.md` has the
+`jq` that joins them, and the BFF now relays `X-Request-ID`, so whoever reports a failure has the id
+in their browser's network tab.
+
+Left open: gunicorn's own lines are still in its format with no request id, Celery's "received" line
+comes before the task's fields exist, and the BFF logs nothing. OpenTelemetry waits for a collector
+to send spans to; the request id is what a trace id would replace.
+
+## 2026-10-22 — M7 #27: a chart has to draw the days nothing happened
+
+#27 asks for charts of queries, tokens and cost per tenant over time, with a date-range filter. #17
+already records every answer that reached the model, with its estimated tokens and cost, so the work
+was a breakdown by day and a page to draw it.
+
+**"An admin" turned out to be everyone.** There are no roles: every member of a tenant is equal, and
+`GET /api/usage` has answered any of them with their own tenant's spend since #17. Reading "per
+tenant" as an operator's view across tenants would have needed an identity the auth model does not
+have and a read that row-level security exists to refuse. So the dashboard shows each workspace its
+own numbers, and ADR-0025 notes it as the first place a member/admin split would apply.
+
+**`GET /api/usage/daily` returns every day of the range, zeros included.** A day with no rows is
+simply absent from a grouped query, and a line drawn through the days that are present runs straight
+from one busy day to the next, as if the quiet days between had been busy too. The totals are summed
+from those same days in `Decimal` rather than queried again, so the headline cannot disagree with
+the line under it. An end date in the future is moved back to today: refusing it would break "this
+month" on the 22nd, and filling it with zeros would describe days that have not happened.
+
+**"Queries" became "Answers".** A refusal never reaches the model, so #17 never charged or recorded
+one. A chart called "queries" would have silently left out every question nothing in the documents
+could answer.
+
+**Dates had two small traps.** On Python 3.11+, `date.fromisoformat` also accepts `20261022` and ISO
+week dates, so the endpoint checks that a date prints back as it was given. In the browser,
+`new Date("2026-10-22")` is midnight UTC, which a reader in California sees as the 21st, so every
+day on the page is formatted in UTC, and the page says the days are UTC.
+
+**The money stays exact all the way to the screen.** One answer costs a fraction of a cent, and
+rounding $0.0105 to "$0.01" would hide the number the page exists to show. Amounts under a dollar
+are printed exactly from the API's decimal strings, and the browser never adds money up.
+
+**Looking at it found what the tests could not.** The first y axis put a peak just over 40K under a
+60K top, wasting a third of the chart; the scale now takes the smallest round step that covers the
+peak in five intervals. I checked it in light and dark, at desktop and phone widths: no hydration
+warnings and no sideways scroll. The charts are hand-drawn SVG with no library, and the readout
+answers the arrow keys as well as the pointer.
+
+The isolation test was also checked against the thing it protects. The per-day statement, handed the
+unscoped manager, still sums only the active tenant's rows on Postgres. Run on SQLite, which has no
+row-level security, the same test fails with both tenants' tokens added together, so it is testing
+the database and not the fixture.
+
 ## 2026-10-22 — M6 #25: two dev servers, and a release order that ran backwards
 
 I expected #25 to be a workflow file. Reading the manifests with a pipeline in mind, the cluster

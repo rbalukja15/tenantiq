@@ -6,6 +6,8 @@
  * assertions about behaviour rather than about string formatting.
  */
 
+import { decimalsFor } from "@/lib/chart";
+
 const UNITS = ["kB", "MB", "GB"] as const;
 
 /**
@@ -45,4 +47,77 @@ export function formatTimestamp(iso: string): string {
   const instant = new Date(iso);
   if (Number.isNaN(instant.getTime())) return iso;
   return instant.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/*
+ * Numbers and days on the usage dashboard (#27).
+ *
+ * Everything below formats in one fixed locale and, for days, in UTC. The dashboard is rendered on
+ * the server and its charts hydrate in the browser, so formatting in the reader's locale would print
+ * one string on each side and React would report a hydration mismatch, the problem
+ * `formatTimestamp` solves by rendering only after mount. A day here is a UTC calendar day, the one
+ * the API counted in, so there is no reader's timezone to honour.
+ */
+
+const COUNT = new Intl.NumberFormat("en-US");
+const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+const CENTS = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+const SHORT_DAY = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+const LONG_DAY = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/** A count with its thousands grouped: 12,345. */
+export function formatCount(value: number): string {
+  return COUNT.format(value);
+}
+
+/** A count short enough for an axis tick: 500, 1.5K, 20K, 1.2M. */
+export function formatCompact(value: number): string {
+  return COMPACT.format(value);
+}
+
+/**
+ * An estimated cost, from the API's decimal string.
+ *
+ * Below a dollar it is printed **exactly**, trailing zeros trimmed down to cents: one answer costs
+ * a fraction of a cent, and rounding $0.0105 to "$0.01" would hide the very number the page exists
+ * to show. From a dollar up, cents are enough. The string is never summed or compared here; totals
+ * come from the API, which adds in decimal, so the money stays exact end to end (ADR-0012).
+ */
+export function formatUsd(value: string): string {
+  const match = /^(\d+)\.?(\d*)$/.exec(value);
+  if (!match) return value; // not a plain decimal: show the server's own bytes rather than a guess
+  const [, whole, fraction] = match;
+  if (Number(whole) >= 1) return `$${CENTS.format(Number(value))}`;
+  return `$0.${fraction.replace(/0+$/, "").padEnd(2, "0")}`;
+}
+
+/**
+ * A tick on a dollar axis. Cents at least while the step is under a dollar, more when the step
+ * needs them ($0.005), and whole dollars from there up: $0, $0.01, $0.02 or $0, $5, $10.
+ */
+export function formatUsdTick(value: number, step: number): string {
+  if (value === 0) return "$0";
+  const decimals = step < 1 ? Math.max(2, decimalsFor(step)) : 0;
+  const digits = { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
+  return `$${value.toLocaleString("en-US", digits)}`;
+}
+
+/** A UTC calendar day, `2026-10-22`, as "Oct 22", or "Thu, Oct 22, 2026" when `long`. */
+export function formatDay(day: string, { long = false }: { long?: boolean } = {}): string {
+  const instant = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(instant.getTime())) return day;
+  return (long ? LONG_DAY : SHORT_DAY).format(instant);
 }

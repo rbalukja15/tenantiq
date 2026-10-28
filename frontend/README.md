@@ -83,7 +83,7 @@ exist, add it to `global.css` rather than reaching for a hex value.
 | Path                    | Role                                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------------------- |
 | `proxy.ts`              | Route gating: no session cookie → `/login`. (Next 16's replacement for `middleware.ts`.)    |
-| `app/(app)/`            | The signed-in surfaces: `/` is the ask screen, `/documents` manages the corpus.             |
+| `app/(app)/`            | The signed-in surfaces: `/` asks, `/documents` manages the corpus, `/usage` charts cost.    |
 | `app/api/auth/*`        | Login, callback, logout — the OIDC flow.                                                    |
 | `app/api/[...path]`     | The API proxy: path hygiene, session, CSRF, token refresh, header allowlists, streaming.    |
 | `lib/`                  | `config`, `session`, `csrf`, `oidc`, `upstream` — all plain functions, all directly tested. |
@@ -147,3 +147,20 @@ asserting where the decision is made rather than through the network:
 One more jsdom trap worth knowing before adding a field here: a `required` **file** input reports
 `valueMissing` even when a file is attached, which blocks form submission and makes every happy-path
 test fail for a reason that has nothing to do with your change.
+
+## Charting usage
+
+`/usage` charts what the workspace's answers cost, day by day (ADR-0025). It is a Server Component
+that calls Django with the session's token, like the tenant header on `/`, and the date range lives
+in the URL, so the filter is five links and a GET form and the page fetches nothing from the
+browser. Three things here are deliberate:
+
+- **The browser never adds up money.** Totals come from the API, every amount is printed from the
+  API's decimal string by `formatUsd`, and the numbers `UsageChart` parses only place the line.
+- **Days are UTC calendar days, formatted as such.** `lib/usage.ts` compares them as `YYYY-MM-DD`
+  strings and `formatDay` formats them in UTC, in one fixed locale: the charts render on the server
+  and hydrate in the browser, and the reader's locale would print a different string on each side.
+- **The charts are SVG drawn by hand, not a library.** Their arithmetic (axis steps, which days get
+  a label) is in `lib/chart.ts`, tested directly, because jsdom does no layout. The colours are the
+  `--series-*` tokens; a third series needs its colour checked for colour-blind separation and 3:1
+  against the surface, as the first two were, not a hue picked by eye.

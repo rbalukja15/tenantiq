@@ -55,8 +55,9 @@ configMapGenerator:
       - DJANGO_DEBUG=false
       - DJANGO_ALLOWED_HOSTS=tenantiq-backend,tenantiq-backend.svc.cluster.local
       # #88: 0.0 refuses nothing, so the product answers every question whether or not the corpus
-      # can. Left at the base default on purpose — the defensible value depends on the embedder #53
-      # chooses, and guessing one here would look like a decision that has not been made.
+      # can. The base's 0.50 was measured on mxbai-embed-large, and a floor does not carry across
+      # embedders: copied to voyage-4 it could refuse questions the corpus answers. This stays at
+      # 0.0 until `make eval` has measured voyage-4's window (docs/evaluation.md, ADR-0021).
       - TENANTIQ_RETRIEVAL_MIN_SIMILARITY=0.0
       # Voyage, not the local Ollama backend, which does not run in this namespace (#53, ADR-0020).
       # The key lives in `tenantiq-secrets`; without it the embedder raises before making a request,

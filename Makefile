@@ -45,7 +45,7 @@ lock: ## Recompile backend/requirements*.lock from pyproject.toml (needs Docker;
 	   pip-compile $(PIP_COMPILE_FLAGS) --extra=dev --output-file=requirements-dev.lock pyproject.toml'
 	@echo "locks recompiled — review the diff, then 'make bootstrap' to install them"
 
-dev: ## Run the full stack locally (compose: db, redis, ollama, backend, worker, frontend)
+dev: ## Run the full stack locally (compose: db, redis, ollama, backend, worker, beat, frontend)
 	@[ -f .env ] || cp .env.example .env  # seed .env on first run so secrets/tunables take effect
 	docker compose up --build
 
@@ -76,11 +76,12 @@ eval: ## Measure retrieval quality against the curated dataset (real embedder, i
 	# Inside the stack on purpose: retrieval numbers are only meaningful against the real embedder,
 	# and on the host TENANTIQ_EMBEDDER_FACTORY points at an Ollama that is usually not reachable.
 	# Every report states the embedder, model and dimension that produced it, so a run that used
-	# the lexical stand-in can never be mistaken for a baseline (#21).
-	docker compose exec backend python -m app.eval.run
+	# the lexical stand-in can never be mistaken for a baseline (#21). WARNING keeps the per-search
+	# log lines (#26) out of the report; problems still print.
+	docker compose exec -e TENANTIQ_LOG_LEVEL=WARNING backend python -m app.eval.run
 
 eval-faithfulness: ## Also generate + judge an answer per question (#22). Two model calls each: minutes.
-	docker compose exec backend python -m app.eval.run --faithfulness
+	docker compose exec -e TENANTIQ_LOG_LEVEL=WARNING backend python -m app.eval.run --faithfulness
 
 # Not .PHONY on purpose. These are real files, so make skips the recipe when the venv is present and
 # runs it — failing with the fix named — when it is not. A `make test` that dies on "pytest: command

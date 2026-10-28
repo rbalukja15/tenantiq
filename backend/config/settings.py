@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -41,6 +42,8 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # Outermost: names the request on every line logged while serving it (#26, ADR-0024).
+    "app.middleware.RequestLogMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.middleware.common.CommonMiddleware",
     # Clears the per-request tenant contextvar after the response (ADR-0002, #8).
@@ -172,6 +175,25 @@ CELERY_TASK_EAGER_PROPAGATES = True
 # amplification); the hard limit (soft + a small grace) SIGKILLs a task that ignores the soft raise.
 TENANTIQ_INGEST_SOFT_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_SOFT_TIME_LIMIT", "240"))
 TENANTIQ_INGEST_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_TIME_LIMIT", "300"))
+# Documents a dead worker left behind (#55, ADR-0023). A task whose process is killed (the hard
+# limit above, the OOM killer, a rollout that outlasts the pod's grace period) never reaches
+# `on_failure`, so its document would stay PROCESSING forever. Celery beat sends a sweep every
+# SWEEP_INTERVAL, and the sweep fails any PROCESSING document whose last change is older than
+# REAP_AFTER. Every attempt refreshes that timestamp and the hard limit ends it, so REAP_AFTER has to
+# clear a whole attempt and its retry's wait in the queue: `manage.py check`, which `migrate` runs,
+# refuses less than twice the limit.
+TENANTIQ_INGEST_REAP_AFTER_SECONDS = int(
+    os.environ.get("TENANTIQ_INGEST_REAP_AFTER_SECONDS", "1800")
+)
+TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS = int(
+    os.environ.get("TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS", "300")
+)
+CELERY_BEAT_SCHEDULE = {
+    "sweep-stuck-documents": {
+        "task": "app.tasks.sweep_stuck_documents",
+        "schedule": TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS,
+    },
+}
 # Parsing bounds (#47): reject an oversized document before it burns CPU/memory. Exceeding either is
 # a permanent ParseError. Defaults are generous — real documents, not adversarial ones, drive them.
 TENANTIQ_MAX_PDF_PAGES = int(os.environ.get("TENANTIQ_MAX_PDF_PAGES", "2000"))
@@ -221,11 +243,17 @@ TENANTIQ_EMBEDDER_FACTORY = os.environ.get("TENANTIQ_EMBEDDER_FACTORY") or (
 # TOP_K: how many tenant-scoped chunks to retrieve as candidate context.
 # MIN_SIMILARITY: cosine similarity floor (1 - distance, in [-1, 1]); a candidate below it is
 # dropped rather than padding the prompt, and if nothing clears the bar the query returns
-# "no relevant context". Default 0.0 keeps anything at least orthogonal to the query; raise it once
-# M5's eval calibrates the floor against the real embedding model.
+# "no relevant context". It is the only thing that lets the product refuse: at 0.0 nothing is ever
+# dropped, so every question gets sources whether or not the corpus has an answer (#88).
+# 0.50 is measured, not guessed (ADR-0021). On the default local embedder, mxbai-embed-large, the
+# best match for every answerable question in the evaluation scores 0.567 or more, and for every
+# unanswerable one 0.441 or less (docs/evaluation.md); 0.50 sits inside that window with room on
+# both sides. The window belongs to one embedder and one corpus, so another model needs its own
+# value from `make eval`.
+# Empty counts as unset (`or`, not a get() default): compose forwards this as `${...:-}`.
 TENANTIQ_RETRIEVAL_TOP_K = int(os.environ.get("TENANTIQ_RETRIEVAL_TOP_K", "5"))
 TENANTIQ_RETRIEVAL_MIN_SIMILARITY = float(
-    os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY", "0.0")
+    os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY") or "0.50"
 )
 
 # Grounded answer generation (M3, #15, ADR-0008). The LLM client is pluggable like the embedder: a
@@ -294,4 +322,50 @@ TENANTIQ_LLM_FACTORY = os.environ.get(
 TENANTIQ_LLM_PRICES: dict[str, dict[str, str]] = {
     TENANTIQ_LLM_OLLAMA_MODEL: {"input": "0", "output": "0"},
     "fake-llm-v1": {"input": "0", "output": "0"},  # the hermetic test / offline client
+}
+
+# Structured logging (#26, ADR-0024). Every line carries the request it belongs to and the tenant it
+# ran for (app.log_context), so one request can be followed from the API through retrieval and the
+# model call, and into the ingestion task it queued. JSON, one object per line, wherever DEBUG is off,
+# for a collector to parse; under DEBUG, which is how compose runs, a readable line that prints the
+# same fields. Lines go to stderr, as gunicorn's and Celery's own do, so a command's report on
+# stdout stays clean. The Celery worker and beat log through this same configuration
+# (config/celery.py) rather than Celery's own.
+TENANTIQ_LOG_FORMAT = os.environ.get("TENANTIQ_LOG_FORMAT") or ("text" if DEBUG else "json")
+if TENANTIQ_LOG_FORMAT not in ("json", "text"):
+    raise ImproperlyConfigured(
+        f"TENANTIQ_LOG_FORMAT must be 'json' or 'text', not {TENANTIQ_LOG_FORMAT!r}."
+    )
+TENANTIQ_LOG_LEVEL = (os.environ.get("TENANTIQ_LOG_LEVEL") or "INFO").upper()
+if TENANTIQ_LOG_LEVEL not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+    raise ImproperlyConfigured(
+        "TENANTIQ_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL, "
+        f"not {TENANTIQ_LOG_LEVEL!r}."
+    )
+# Django's loggers and the Anthropic SDK's stop at INFO. Below it, Django prints every file the
+# autoreloader watches and, with DEBUG on, every SQL statement with its parameters, and the SDK prints
+# each request whole, the prompt and its passages included (docs/threat-model.md, T15).
+_LIBRARY_LOG_LEVEL = "INFO" if TENANTIQ_LOG_LEVEL == "DEBUG" else TENANTIQ_LOG_LEVEL
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {"log_context": {"()": "app.log_context.LogContextFilter"}},
+    "formatters": {
+        "json": {"()": "app.log_context.JsonFormatter"},
+        "text": {"()": "app.log_context.TextFormatter"},
+    },
+    "handlers": {
+        "stderr": {
+            "()": "app.log_context.StderrHandler",
+            "filters": ["log_context"],
+            "formatter": TENANTIQ_LOG_FORMAT,
+        },
+    },
+    "root": {"handlers": ["stderr"], "level": TENANTIQ_LOG_LEVEL},
+    "loggers": {
+        # Django's own lines (django.request's 4xx and 5xx among them) reach the root handler only,
+        # rather than also printing through Django's default console handler under DEBUG.
+        "django": {"handlers": [], "level": _LIBRARY_LOG_LEVEL, "propagate": True},
+        "anthropic": {"level": _LIBRARY_LOG_LEVEL},
+    },
 }

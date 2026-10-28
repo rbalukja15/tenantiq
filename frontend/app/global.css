@@ -49,6 +49,15 @@
   --crit: #94291f;
   --crit-wash: #f7e5e3;
 
+  /* --- data: the usage charts' series, and nothing else (#27, ADR-0025) ------------------------
+   * Its own family for the same reason status is one: a line on a chart must not read as a citation
+   * or as a state. Blue then orange, in that order, which is what keeps two lines apart under red-
+   * green colour blindness; the pair was checked for that and for 3:1 against --surface in both
+   * themes. A third series would need checking again, not a third hue picked by eye.
+   */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+
   /* --- type ------------------------------------------------------------------------------------
    * Three roles, each carrying meaning rather than decoration:
    *   serif — prose: answers and source quotations. Text to be READ.
@@ -114,6 +123,9 @@
     --warn-wash: #2c2415;
     --crit: #ec8175;
     --crit-wash: #2e1a18;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
   }
 }
 
