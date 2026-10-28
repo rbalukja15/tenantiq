@@ -236,9 +236,9 @@ def _reap_tenant(tenant: Tenant, *, cutoff: datetime, now: datetime) -> int:
         )
         if not stuck:
             return 0
-        Document.objects.filter(id__in=[document_id for document_id, _ in stuck]).update(
-            status=Document.Status.FAILED, error=REAPED_MESSAGE, updated_at=now
-        )
+        Document.objects.filter(
+            id__in=[document_id for document_id, _ in stuck], status=Document.Status.PROCESSING
+        ).update(status=Document.Status.FAILED, error=REAPED_MESSAGE, updated_at=now)
     for document_id, since in stuck:
         logger.warning(
             "Reaped document %s (tenant %s): PROCESSING since %s, longer than an attempt can run, "
