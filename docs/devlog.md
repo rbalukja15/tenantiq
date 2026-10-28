@@ -1726,3 +1726,46 @@ in their browser's network tab.
 Left open: gunicorn's own lines are still in its format with no request id, Celery's "received" line
 comes before the task's fields exist, and the BFF logs nothing. OpenTelemetry waits for a collector
 to send spans to; the request id is what a trace id would replace.
+
+## 2026-10-22 — M7 #27: a chart has to draw the days nothing happened
+
+#27 asks for charts of queries, tokens and cost per tenant over time, with a date-range filter. #17
+already records every answer that reached the model, with its estimated tokens and cost, so the work
+was a breakdown by day and a page to draw it.
+
+**"An admin" turned out to be everyone.** There are no roles: every member of a tenant is equal, and
+`GET /api/usage` has answered any of them with their own tenant's spend since #17. Reading "per
+tenant" as an operator's view across tenants would have needed an identity the auth model does not
+have and a read that row-level security exists to refuse. So the dashboard shows each workspace its
+own numbers, and ADR-0025 notes it as the first place a member/admin split would apply.
+
+**`GET /api/usage/daily` returns every day of the range, zeros included.** A day with no rows is
+simply absent from a grouped query, and a line drawn through the days that are present runs straight
+from one busy day to the next, as if the quiet days between had been busy too. The totals are summed
+from those same days in `Decimal` rather than queried again, so the headline cannot disagree with
+the line under it. An end date in the future is moved back to today: refusing it would break "this
+month" on the 22nd, and filling it with zeros would describe days that have not happened.
+
+**"Queries" became "Answers".** A refusal never reaches the model, so #17 never charged or recorded
+one. A chart called "queries" would have silently left out every question nothing in the documents
+could answer.
+
+**Dates had two small traps.** On Python 3.11+, `date.fromisoformat` also accepts `20261022` and ISO
+week dates, so the endpoint checks that a date prints back as it was given. In the browser,
+`new Date("2026-10-22")` is midnight UTC, which a reader in California sees as the 21st, so every
+day on the page is formatted in UTC, and the page says the days are UTC.
+
+**The money stays exact all the way to the screen.** One answer costs a fraction of a cent, and
+rounding $0.0105 to "$0.01" would hide the number the page exists to show. Amounts under a dollar
+are printed exactly from the API's decimal strings, and the browser never adds money up.
+
+**Looking at it found what the tests could not.** The first y axis put a peak just over 40K under a
+60K top, wasting a third of the chart; the scale now takes the smallest round step that covers the
+peak in five intervals. I checked it in light and dark, at desktop and phone widths: no hydration
+warnings and no sideways scroll. The charts are hand-drawn SVG with no library, and the readout
+answers the arrow keys as well as the pointer.
+
+The isolation test was also checked against the thing it protects. The per-day statement, handed the
+unscoped manager, still sums only the active tenant's rows on Postgres. Run on SQLite, which has no
+row-level security, the same test fails with both tenants' tokens added together, so it is testing
+the database and not the fixture.
