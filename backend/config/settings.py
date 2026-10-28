@@ -240,11 +240,17 @@ TENANTIQ_EMBEDDER_FACTORY = os.environ.get("TENANTIQ_EMBEDDER_FACTORY") or (
 # TOP_K: how many tenant-scoped chunks to retrieve as candidate context.
 # MIN_SIMILARITY: cosine similarity floor (1 - distance, in [-1, 1]); a candidate below it is
 # dropped rather than padding the prompt, and if nothing clears the bar the query returns
-# "no relevant context". Default 0.0 keeps anything at least orthogonal to the query; raise it once
-# M5's eval calibrates the floor against the real embedding model.
+# "no relevant context". It is the only thing that lets the product refuse: at 0.0 nothing is ever
+# dropped, so every question gets sources whether or not the corpus has an answer (#88).
+# 0.50 is measured, not guessed (ADR-0021). On the default local embedder, mxbai-embed-large, the
+# best match for every answerable question in the evaluation scores 0.567 or more, and for every
+# unanswerable one 0.441 or less (docs/evaluation.md); 0.50 sits inside that window with room on
+# both sides. The window belongs to one embedder and one corpus, so another model needs its own
+# value from `make eval`.
+# Empty counts as unset (`or`, not a get() default): compose forwards this as `${...:-}`.
 TENANTIQ_RETRIEVAL_TOP_K = int(os.environ.get("TENANTIQ_RETRIEVAL_TOP_K", "5"))
 TENANTIQ_RETRIEVAL_MIN_SIMILARITY = float(
-    os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY", "0.0")
+    os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY") or "0.50"
 )
 
 # Grounded answer generation (M3, #15, ADR-0008). The LLM client is pluggable like the embedder: a

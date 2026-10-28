@@ -258,7 +258,7 @@ def test_faithfulness_is_off_unless_asked_for(tmp_path):
 
 
 @requires_postgres
-def test_it_generates_and_judges_an_answer_per_question(tmp_path):
+def test_it_generates_and_judges_an_answer_per_question(tmp_path, no_similarity_floor):
     data = _dataset(
         tmp_path,
         {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
@@ -276,7 +276,7 @@ def test_it_generates_and_judges_an_answer_per_question(tmp_path):
 
 
 @requires_postgres
-def test_a_run_judged_by_the_fake_says_it_is_not_a_measurement(tmp_path):
+def test_a_run_judged_by_the_fake_says_it_is_not_a_measurement(tmp_path, no_similarity_floor):
     # FakeJudge checks lexical containment rather than reading anything. Its numbers look exactly
     # like real ones in a table, which is why the report has to disown them.
     data = _dataset(
@@ -292,7 +292,7 @@ def test_a_run_judged_by_the_fake_says_it_is_not_a_measurement(tmp_path):
 
 
 @requires_postgres
-def test_the_report_renders_the_grounding_section(tmp_path):
+def test_the_report_renders_the_grounding_section(tmp_path, no_similarity_floor):
     data = _dataset(
         tmp_path,
         {"a.txt": "Invoices are payable within forty-five days of the invoice date."},
@@ -333,7 +333,9 @@ class _BrokenLLM:
 
 
 @requires_postgres
-def test_faithfulness_measures_the_answer_the_product_streams(tmp_path, settings):
+def test_faithfulness_measures_the_answer_the_product_streams(
+    tmp_path, settings, no_similarity_floor
+):
     """The bug this pins cost a whole 16-minute run and reported a meaningless 0.05.
 
     The two generation paths cite differently. The non-streaming path returns structured
@@ -360,7 +362,9 @@ def test_faithfulness_measures_the_answer_the_product_streams(tmp_path, settings
 
 
 @requires_postgres
-def test_a_generation_failure_is_a_recorded_gap_not_a_dead_run(tmp_path, settings):
+def test_a_generation_failure_is_a_recorded_gap_not_a_dead_run(
+    tmp_path, settings, no_similarity_floor
+):
     # `stream_grounded_answer` turns a backend failure into an ErrorEvent rather than raising, so
     # without handling it the harness would score an empty answer as a real, badly-grounded one.
     settings.TENANTIQ_LLM_FACTORY = lambda: _BrokenLLM()
