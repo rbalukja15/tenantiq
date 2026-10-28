@@ -172,6 +172,25 @@ CELERY_TASK_EAGER_PROPAGATES = True
 # amplification); the hard limit (soft + a small grace) SIGKILLs a task that ignores the soft raise.
 TENANTIQ_INGEST_SOFT_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_SOFT_TIME_LIMIT", "240"))
 TENANTIQ_INGEST_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_TIME_LIMIT", "300"))
+# Documents a dead worker left behind (#55, ADR-0023). A task whose process is killed (the hard
+# limit above, the OOM killer, a rollout that outlasts the pod's grace period) never reaches
+# `on_failure`, so its document would stay PROCESSING forever. Celery beat sends a sweep every
+# SWEEP_INTERVAL, and the sweep fails any PROCESSING document whose last change is older than
+# REAP_AFTER. Every attempt refreshes that timestamp and the hard limit ends it, so REAP_AFTER has to
+# clear a whole attempt and its retry's wait in the queue: `manage.py check`, which `migrate` runs,
+# refuses less than twice the limit.
+TENANTIQ_INGEST_REAP_AFTER_SECONDS = int(
+    os.environ.get("TENANTIQ_INGEST_REAP_AFTER_SECONDS", "1800")
+)
+TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS = int(
+    os.environ.get("TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS", "300")
+)
+CELERY_BEAT_SCHEDULE = {
+    "sweep-stuck-documents": {
+        "task": "app.tasks.sweep_stuck_documents",
+        "schedule": TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS,
+    },
+}
 # Parsing bounds (#47): reject an oversized document before it burns CPU/memory. Exceeding either is
 # a permanent ParseError. Defaults are generous — real documents, not adversarial ones, drive them.
 TENANTIQ_MAX_PDF_PAGES = int(os.environ.get("TENANTIQ_MAX_PDF_PAGES", "2000"))

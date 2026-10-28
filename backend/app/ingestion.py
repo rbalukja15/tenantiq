@@ -16,6 +16,7 @@ are recorded by the task's ``on_failure`` via :func:`mark_ingestion_failed`.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
@@ -38,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 # Cap the surfaced reason so a stray traceback or huge parser message can't bloat the row.
 MAX_ERROR_LENGTH = 2000
+
+# What a tenant sees on a document the sweep reaped (#55). Nothing more is known: the worker that
+# held it is gone. The upload itself is intact, so the retry endpoint can run it again.
+REAPED_MESSAGE = "Processing stopped before it finished. Retry the document to process it again."
 
 # A soft-limit hit means the work is too heavy for the shared worker — permanent, no retry (#47).
 # So is an embedder that cannot run as configured (no key, a rejected key) or whose provider refuses
@@ -193,3 +198,53 @@ def mark_ingestion_failed(document_id: int, tenant_id, exc: BaseException) -> No
             error=_user_safe_message(exc)[:MAX_ERROR_LENGTH],
             updated_at=timezone.now(),
         )
+
+
+def reap_stuck_documents(*, now: datetime | None = None) -> int:
+    """Fail every PROCESSING document whose ingestion can no longer be running (#55, ADR-0023).
+
+    ADR-0005 left one way for a document to stay PROCESSING forever: a worker killed between phase 1
+    and ``on_failure`` (SIGKILL, OOM, a pod that outlives its grace period). Nothing will ever finish
+    it, so its tenant sees "processing" indefinitely, and the retry endpoint refuses it because only
+    a FAILED document can be retried.
+
+    Each attempt refreshes ``updated_at`` in phase 1 and the hard time limit kills it, so a document
+    is only reaped once its last change is older than ``TENANTIQ_INGEST_REAP_AFTER_SECONDS``, which
+    the system checks keep above twice that limit. A reaped document becomes FAILED with
+    :data:`REAPED_MESSAGE`, which makes it retryable through the existing endpoint.
+
+    Tenants are swept one at a time, each inside its own ``tenant_context``: ``Document`` is
+    tenant-owned, so both isolation layers apply here exactly as they do to a request. Returns the
+    number of documents reaped.
+    """
+    now = now or timezone.now()
+    cutoff = now - timedelta(seconds=settings.TENANTIQ_INGEST_REAP_AFTER_SECONDS)
+    reaped = 0
+    for tenant in Tenant.objects.order_by("pk"):  # Tenant is not tenant-owned; readable un-scoped
+        reaped += _reap_tenant(tenant, cutoff=cutoff, now=now)
+    return reaped
+
+
+def _reap_tenant(tenant: Tenant, *, cutoff: datetime, now: datetime) -> int:
+    with tenant_context(tenant):
+        # Locked, so the rows logged below are exactly the rows updated. A row someone else holds
+        # is skipped rather than waited on: whatever is writing it right now is not a dead worker.
+        stuck = list(
+            Document.objects.select_for_update(skip_locked=True)
+            .filter(status=Document.Status.PROCESSING, updated_at__lt=cutoff)
+            .values_list("id", "updated_at")
+        )
+        if not stuck:
+            return 0
+        Document.objects.filter(
+            id__in=[document_id for document_id, _ in stuck], status=Document.Status.PROCESSING
+        ).update(status=Document.Status.FAILED, error=REAPED_MESSAGE, updated_at=now)
+    for document_id, since in stuck:
+        logger.warning(
+            "Reaped document %s (tenant %s): PROCESSING since %s, longer than an attempt can run, "
+            "so its worker most likely died mid-ingestion. It is now FAILED and can be retried.",
+            document_id,
+            tenant.id,
+            since.isoformat(),
+        )
+    return len(stuck)

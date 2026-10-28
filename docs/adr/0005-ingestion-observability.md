@@ -85,6 +85,11 @@ tenant-scoped retry endpoint.**
 - A **hard process kill** (SIGKILL / OOM) between phase 1 and `on_failure` can still leave a document
   in `PROCESSING`, because `on_failure` never runs. `updated_at` makes such stragglers detectable by
   age; a periodic sweeper to reap them is future work, out of scope for #13.
+
+  > **Resolved by #55 (ADR-0023).** Celery beat sends a sweep that fails a `PROCESSING` document
+  > unchanged for longer than any attempt can run, so it carries a reason and can be retried. The
+  > hard time limit turned out to be one of the kills: it ends the pool process, so `on_failure`
+  > never runs for it either.
 - Ingestion now writes in two transactions rather than one; a successful run is two commits. This is
   the price of a durable attempt record and is acceptable.
 - Retry is a new tenant-scoped write path; isolation is proven by a cross-tenant retry test (B cannot

@@ -43,7 +43,7 @@ pipeline with `kustomize edit set image`.
 
 ### 2. Create the Secret (prod only)
 
-Never in git. Four keys, consumed by the backend, the worker and the migrate Job:
+Never in git. Four keys, consumed by the backend, the worker, beat and the migrate Job:
 
 ```bash
 kubectl -n tenantiq create secret generic tenantiq-secrets \
@@ -66,8 +66,9 @@ External Secrets or Sealed Secrets work the same way as long as the resulting Se
 
 > **Rotating this Secret does not restart anything.** It is referenced by a fixed name with no
 > content hash — the price of not generating it from the repo — so a rotation must be followed by
-> `kubectl -n tenantiq rollout restart deploy/tenantiq-backend deploy/tenantiq-worker`. The
-> ConfigMap *is* generated and hashed, so config changes roll the pods on their own.
+> `kubectl -n tenantiq rollout restart deploy/tenantiq-backend deploy/tenantiq-worker
+> deploy/tenantiq-beat`. The ConfigMap *is* generated and hashed, so config changes roll the pods
+> on their own.
 
 ### 3. The database must be prepared before the first deploy
 
@@ -126,6 +127,7 @@ kubectl -n $NS wait --for=condition=complete job/tenantiq-migrate --timeout=300s
 
 kubectl -n $NS rollout status deploy/tenantiq-backend
 kubectl -n $NS rollout status deploy/tenantiq-worker
+kubectl -n $NS rollout status deploy/tenantiq-beat
 kubectl -n $NS rollout status deploy/tenantiq-frontend
 ```
 
@@ -164,6 +166,13 @@ replica signs users out depending on which pod they reach; the API and worker sh
 so replicas multiply writers on one filesystem. Both want a code change first — a shared session
 store, and object storage for uploads. A test fails if the numbers are raised, so that the person
 raising them reads this.
+
+**`tenantiq-beat` is one replica with the `Recreate` strategy, and must stay that way.** It is
+Celery's scheduler (#55, ADR-0023): every running copy sends every scheduled entry, so two of them,
+including the overlap a rolling update would create, double the schedule. Its one entry today is
+the sweep that fails documents a dead worker left in PROCESSING, tuned by
+`TENANTIQ_INGEST_REAP_AFTER_SECONDS` and `TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS`. The migrate Job
+refuses a threshold under twice `TENANTIQ_INGEST_TIME_LIMIT`, so a release carrying one stops there.
 
 **`tenantiq-media` is ReadWriteMany.** Most cloud block storage is ReadWriteOnce. On a single-node
 dev cluster the overlay patches it down to RWO, which works only because every pod lands on the same
