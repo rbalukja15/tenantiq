@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone as dt_timezone
@@ -23,12 +24,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from app.generation import (
+    Citation,
     CitationsEvent,
     ErrorEvent,
     TokenEvent,
     get_llm,
     stream_grounded_answer,
 )
+from app.log_context import ms_since
 from app.models import Chunk, Document, Tenant
 from app.rag import retrieve_context
 from app.serializers import ChunkSerializer, DocumentSerializer
@@ -391,28 +394,96 @@ class QueryView(APIView):
 
         ``model`` is the model the resolved client actually uses, not the configured Anthropic name,
         so an answer served by the local Ollama fallback is priced as that model.
+
+        It also logs the generation line (#26, ADR-0024), last, so it can say how the stream ended:
+        ``answered``, ``refused``, ``failed``, ``disconnected`` when the client hung up first, or
+        ``error`` when the stream raised.
         """
+        model = getattr(llm, "model", "") or settings.TENANTIQ_LLM_MODEL
         produced: list[str] = []
+        citations: tuple[Citation, ...] = ()
+        outcome = "incomplete"  # replaced by whatever ends the stream
+        started = time.perf_counter()
+        first_token_ms: int | None = None
         try:
             for event in stream_grounded_answer(context, llm=llm):
                 if isinstance(event, TokenEvent):
+                    if first_token_ms is None:
+                        first_token_ms = ms_since(started)
                     produced.append(event.text)
+                elif isinstance(event, CitationsEvent):
+                    outcome = "refused" if event.refused else "answered"
+                    citations = event.citations
+                elif isinstance(event, ErrorEvent):
+                    outcome = "failed"
                 yield _sse_frame(event)
+        except GeneratorExit:
+            outcome = "disconnected"
+            raise
+        except BaseException:
+            outcome = "error"
+            raise
         finally:
-            if context.has_context and produced:
+            spent = context.has_context and bool(produced)
+            input_tokens = output_tokens = 0
+            if spent:
+                input_tokens = estimate_tokens(context.system_prompt) + estimate_tokens(
+                    context.user_prompt
+                )
+                output_tokens = estimate_tokens("".join(produced))
                 try:
                     record_query_usage(
                         tenant,
-                        model=getattr(llm, "model", "") or settings.TENANTIQ_LLM_MODEL,
-                        input_tokens=estimate_tokens(context.system_prompt)
-                        + estimate_tokens(context.user_prompt),
-                        output_tokens=estimate_tokens("".join(produced)),
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
                     )
                 except Exception:  # noqa: BLE001 — accounting must never corrupt a served answer
                     # Every token has already been sent to the client. Losing a usage row is bad (it
                     # is logged at exception level for follow-up); truncating or erroring a response
                     # the client already received in full would be worse.
                     logger.exception("failed to record query usage for tenant %s", tenant.id)
+            _log_generation(
+                outcome,
+                # A refusal never reaches the model, so there is no model and no first token to time.
+                model=model if context.has_context else None,
+                duration_ms=ms_since(started),
+                first_token_ms=first_token_ms if context.has_context else None,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                citations=citations,
+            )
+
+
+def _log_generation(
+    outcome: str,
+    *,
+    model: str | None,
+    duration_ms: int,
+    first_token_ms: int | None,
+    input_tokens: int,
+    output_tokens: int,
+    citations: tuple[Citation, ...],
+) -> None:
+    """One line per answer: how it ended, which model, how long, what it cost in tokens, what it
+    cited. The answer's text is not on it, nor is the question's (ADR-0024)."""
+    logger.info(
+        "generation %s in %d ms",
+        outcome,
+        duration_ms,
+        extra={
+            "event": "generation",
+            "outcome": outcome,
+            "model": model,
+            "duration_ms": duration_ms,
+            "first_token_ms": first_token_ms,
+            # The same estimates the usage row is charged with (#17), so the line and the bill agree.
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "citations": len(citations),
+            "cited_chunk_ids": [citation.chunk_id for citation in citations],
+        },
+    )
 
 
 class UsageView(APIView):

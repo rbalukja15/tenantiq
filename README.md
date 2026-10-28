@@ -20,7 +20,7 @@ A production-shaped RAG system built in the open — one reviewed PR per issue, 
 - **Tenant isolation is proven, not promised.** Each tenant's data is walled off by **two independent layers** — a scoped ORM manager _and_ forced Postgres row-level security. An [adversarial test suite](backend/tests/test_tenant_isolation.py) shows the database still blocks a cross-tenant read _with the application filter deliberately removed_. Design: [`docs/tenant-isolation.md`](docs/tenant-isolation.md).
 - **Grounding is a hard contract, enforced end to end.** The LLM never computes numbers and never invents citations — answers stay grounded in retrieved tenant-scoped chunks, every citation resolves to a real chunk ID, and the UI will only make a `[1]` clickable once it has fetched the passage behind it. When nothing relevant is retrieved, the product refuses and says so rather than answering thinly.
 - **Engineered like a product.** Async ingestion (parse → chunk → embed) with retries and observability, a browser UI that streams an answer beside the passages it cites and manages the corpus that feeds it, and a one-command Docker stack (`make dev`) that brings up the whole system.
-- **Retrieval quality is measured, not asserted.** `make eval` runs a curated question set through the real ingestion and retrieval path and reports precision@k, recall@k, hit@k and MRR, stamped with the embedder that produced them. First baselines: **hit@3 1.00, MRR 0.75** for retrieval; for grounding, **zero invented citations across 50 claims** but only **half the claims cited at all** and 18 stating a figure with nothing behind it. The harness also surfaced that the shipped similarity floor of `0.0` refuses nothing, so the product cannot decline a question it has no evidence for. Method, numbers and limitations: [`docs/evaluation.md`](docs/evaluation.md).
+- **Retrieval quality is measured, not asserted.** `make eval` runs a curated question set through the real ingestion and retrieval path and reports precision@k, recall@k, hit@k and MRR, stamped with the embedder that produced them. First baselines: **hit@3 1.00, MRR 0.75** for retrieval; for grounding, **zero invented citations across 50 claims** but only **half the claims cited at all** and 18 stating a figure with nothing behind it. The harness also surfaced that the shipped similarity floor of `0.0` refused nothing, so the product could not decline a question it had no evidence for; the default is now `0.50`, taken from the measured gap between answerable and unanswerable questions (#88). Method, numbers and limitations: [`docs/evaluation.md`](docs/evaluation.md).
 - **Decisions are written down.** Seventeen [Architecture Decision Records](docs/adr) explain the _why_ behind the stack, isolation model, chunking, embeddings, streaming, the frontend, and deployment.
 
 **Status:** M0–M5 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers, the frontend that uses them, and an evaluation harness that measures both retrieval and answer faithfulness); M6 (deployment) next. See the [Roadmap](#roadmap).
@@ -99,7 +99,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - **M4** ✅ Frontend & streaming UX — app shell + OIDC via a BFF, design system, the streaming ask screen with clickable citations, and document management (upload with progress, live ingestion status, delete)
 - **M5** ✅ Evaluation harness — retrieval metrics and answer faithfulness, both measured against the real pipeline (`make eval`, `make eval-faithfulness`)
 - **M6** 🚧 Deployment & CI/CD — one-command Docker Compose stack landed
-- **M7** 🚧 Observability & cost dashboard — a usage page that charts each workspace's answers, tokens and estimated cost per day, over any range up to a year
+- **M7** 🚧 Observability & cost dashboard — structured logs that follow one request from the API through retrieval and the model into the worker ([docs/observability.md](docs/observability.md)), and a usage page that charts each workspace's answers, tokens and estimated cost per day, over any range up to a year
 - **M8** ⬜ Polish & recruiter-ready docs
 
 ## Key engineering decisions
@@ -124,6 +124,9 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0018 — A build that resolves to the same thing twice](docs/adr/0018-reproducible-toolchain.md)
 - [ADR-0019 — Deploying with Kustomize](docs/adr/0019-kubernetes-deployment.md)
 - [ADR-0020 — Voyage for embeddings, and one dimension everywhere](docs/adr/0020-production-embedding-and-llm-providers.md)
+- [ADR-0021 — The similarity floor, measured per embedder](docs/adr/0021-similarity-floor.md)
+- [ADR-0023 — Reaping documents a dead worker left in PROCESSING](docs/adr/0023-reaping-stuck-ingestion.md)
+- [ADR-0024 — Structured logs that follow one request end to end](docs/adr/0024-structured-logging.md)
 - [ADR-0025 — A usage dashboard drawn from each workspace's own numbers](docs/adr/0025-usage-dashboard.md)
 
 ## License
