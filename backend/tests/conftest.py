@@ -106,6 +106,19 @@ def _reset_throttle_cache():
     cache.clear()
 
 
+@pytest.fixture
+def no_similarity_floor(settings):
+    """Admit every source retrieval finds, for tests about what happens *after* retrieval (#88).
+
+    The shipped floor was measured on mxbai-embed-large, and the suite embeds with the hashing
+    embedder, whose similarities count shared words on a different scale: at the shipped floor most
+    of these tests' questions would be refused, and a test of streaming, usage accounting or tenant
+    isolation would quietly become a test of the refusal path. 0.0 keeps anything at least
+    orthogonal to the question. The floor itself is covered in ``test_similarity_floor.py``.
+    """
+    settings.TENANTIQ_RETRIEVAL_MIN_SIMILARITY = 0.0
+
+
 @pytest.fixture(scope="session")
 def rsa_keys() -> tuple[bytes, bytes]:
     """(private_pem, public_pem) for RS256 signing/verification in tests."""

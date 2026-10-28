@@ -175,6 +175,25 @@ CELERY_TASK_EAGER_PROPAGATES = True
 # amplification); the hard limit (soft + a small grace) SIGKILLs a task that ignores the soft raise.
 TENANTIQ_INGEST_SOFT_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_SOFT_TIME_LIMIT", "240"))
 TENANTIQ_INGEST_TIME_LIMIT = int(os.environ.get("TENANTIQ_INGEST_TIME_LIMIT", "300"))
+# Documents a dead worker left behind (#55, ADR-0023). A task whose process is killed (the hard
+# limit above, the OOM killer, a rollout that outlasts the pod's grace period) never reaches
+# `on_failure`, so its document would stay PROCESSING forever. Celery beat sends a sweep every
+# SWEEP_INTERVAL, and the sweep fails any PROCESSING document whose last change is older than
+# REAP_AFTER. Every attempt refreshes that timestamp and the hard limit ends it, so REAP_AFTER has to
+# clear a whole attempt and its retry's wait in the queue: `manage.py check`, which `migrate` runs,
+# refuses less than twice the limit.
+TENANTIQ_INGEST_REAP_AFTER_SECONDS = int(
+    os.environ.get("TENANTIQ_INGEST_REAP_AFTER_SECONDS", "1800")
+)
+TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS = int(
+    os.environ.get("TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS", "300")
+)
+CELERY_BEAT_SCHEDULE = {
+    "sweep-stuck-documents": {
+        "task": "app.tasks.sweep_stuck_documents",
+        "schedule": TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS,
+    },
+}
 # Parsing bounds (#47): reject an oversized document before it burns CPU/memory. Exceeding either is
 # a permanent ParseError. Defaults are generous — real documents, not adversarial ones, drive them.
 TENANTIQ_MAX_PDF_PAGES = int(os.environ.get("TENANTIQ_MAX_PDF_PAGES", "2000"))
@@ -224,11 +243,17 @@ TENANTIQ_EMBEDDER_FACTORY = os.environ.get("TENANTIQ_EMBEDDER_FACTORY") or (
 # TOP_K: how many tenant-scoped chunks to retrieve as candidate context.
 # MIN_SIMILARITY: cosine similarity floor (1 - distance, in [-1, 1]); a candidate below it is
 # dropped rather than padding the prompt, and if nothing clears the bar the query returns
-# "no relevant context". Default 0.0 keeps anything at least orthogonal to the query; raise it once
-# M5's eval calibrates the floor against the real embedding model.
+# "no relevant context". It is the only thing that lets the product refuse: at 0.0 nothing is ever
+# dropped, so every question gets sources whether or not the corpus has an answer (#88).
+# 0.50 is measured, not guessed (ADR-0021). On the default local embedder, mxbai-embed-large, the
+# best match for every answerable question in the evaluation scores 0.567 or more, and for every
+# unanswerable one 0.441 or less (docs/evaluation.md); 0.50 sits inside that window with room on
+# both sides. The window belongs to one embedder and one corpus, so another model needs its own
+# value from `make eval`.
+# Empty counts as unset (`or`, not a get() default): compose forwards this as `${...:-}`.
 TENANTIQ_RETRIEVAL_TOP_K = int(os.environ.get("TENANTIQ_RETRIEVAL_TOP_K", "5"))
 TENANTIQ_RETRIEVAL_MIN_SIMILARITY = float(
-    os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY", "0.0")
+    os.environ.get("TENANTIQ_RETRIEVAL_MIN_SIMILARITY") or "0.50"
 )
 
 # Grounded answer generation (M3, #15, ADR-0008). The LLM client is pluggable like the embedder: a

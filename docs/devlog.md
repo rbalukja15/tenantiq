@@ -1595,6 +1595,86 @@ Retrieval now searches only the active model's chunks, so a stale corpus gets th
 relevant context" refusal, and `backfill_embeddings` re-embeds chunks from another model as well as
 the empty ones.
 
+## 2026-10-22 — M6 #88: the refusal nobody could reach
+
+The similarity floor shipped at `0.0` in #14, with a note to raise it once the evaluation could say
+where. #21 said where, and also why `0.0` was never conservative: text embeddings score effectively
+always above it, so it dropped nothing, every tenant with a single chunk had "context" for every
+question, and the refusal that #15, #19 and ADR-0016 had built end to end could not happen in a
+default deployment.
+
+**The value is `0.50`, from the window already measured** on `mxbai-embed-large`, the default
+embedder: worst answerable question 0.567, best unanswerable 0.441. It sits 0.059 above the one and
+0.067 below the other. Production is the part I could not do from here. It runs `voyage-4`, whose
+window nobody has measured, and copying a floor across embedders is exactly what #88 warned
+against, so the prod overlay keeps `0.0` with the reason beside it until one `make eval` against
+Voyage provides a number (ADR-0021).
+
+**Raising the default broke eight tests, and quietly changed six more.** The eight were easy:
+"terms?" asked of a chunk reading "Net thirty days.", two texts with no word in common, which had
+passed only because the floor admitted anything. The six were the interesting ones, and nothing
+pointed at them. I found them by wrapping `_select_sources` for one run of the suite and listing
+every test in which the floor dropped a candidate. The usage-accounting test that injects a failing
+write kept passing because a refused question is never charged, so the failure it exists to inject
+never fired. The HTTP tenant-isolation test kept passing with nothing cited at all. Both now take a
+`no_similarity_floor` fixture, which is what they had always assumed; the isolation test in
+`test_rag.py` had already pinned `min_similarity=0.0` for the same reason.
+
+**The suite's embedder cannot calibrate anything**, which shaped the new tests. The hashing stand-in
+counts shared words, and on the evaluation dataset its gap is −0.33: "What is the capital of Peru?"
+scores 0.47 on stop words alone, higher than any answerable question. So the floor tests use
+questions that share no word with the corpus or nearly all of them, and the calibration itself is
+pinned separately: a test fails if the default leaves the measured window.
+
+`make eval` now exits 1 when the gap is not positive. At that point no floor can separate the
+questions, and that should stop a pipeline rather than sit in a table. One thing to remember next
+time faithfulness is measured: the published numbers were taken at `0.0`. Every in-corpus question
+still clears `0.50`, but any of its passages scoring under it no longer reaches the prompt, so the
+next run is not directly comparable with the last.
+
+## 2026-10-22 — M7 #55: the time limit was one of the kills
+
+ADR-0005 left one known hole: a worker killed between phase 1 and `on_failure` leaves its document
+PROCESSING forever, where the tenant sees work in progress and the retry endpoint refuses it. I filed
+#55 as a rare-event cleanup. **Reading Celery 5.6.3 to see which kills skip `on_failure` changed
+that.** The hook runs inside the pool process that executed the task, so anything that kills that
+process skips it: the OOM killer, a node drain, and the hard time limit itself. When #47's limit
+fires, the parent records the failure in the result backend and never calls the task's own handler,
+so the guard I added for a crafted upload strands the document of the upload it stops. A Kubernetes
+rollout also SIGKILLs the worker 30 seconds after SIGTERM while an ingestion may run for 300, so once
+#25 deploys every merge, every merge can strand whatever was being ingested at the time.
+
+I ran both halves for real, with Redis, a worker and beat, and the limits cut to seconds. An
+ingestion that swallowed its soft limit was killed at the hard one (`ForkPoolWorker-1 exited with
+signal 9 (SIGKILL)`), the log had no terminal-failure line because `on_failure` never ran, and the
+document sat in PROCESSING until the next sweep failed it with its reason four seconds later.
+
+**The fix is age, and the work was in proving the age is safe.** Every attempt stamps `updated_at`
+in phase 1 and the hard limit ends it, so during an attempt a document is never older than 300 s;
+between attempts it waits a few seconds of backoff and then for a free worker. Celery beat sends a
+sweep every 5 minutes that fails any PROCESSING document unchanged for 30. A system check refuses a
+threshold under twice the time limit, and since `migrate` runs the checks before it touches the
+database, a release carrying a bad value stops at its migrate Job before any pod changes. The first
+version of that test used `call_command("migrate")` and failed, because `call_command` skips the
+system checks unless told otherwise, so it said nothing about the command the Job runs. It now runs
+the real `manage.py migrate --check` in a subprocess.
+
+**A wrong reap heals itself, which is what makes a generous threshold a choice rather than a
+guess.** A retry that waits behind other ingestions for longer than the threshold is reaped, then
+its own phase 1 sets it back to PROCESSING and it finishes READY. If the tenant presses retry in
+between, the document is ingested twice, which ADR-0005's idempotent re-ingestion already absorbs.
+
+**The sweep is a new cross-tenant query path, so it runs one tenant at a time inside
+`tenant_context`.** One test shows a tenant's sweep leaving another tenant's stuck document alone. A
+Postgres-only test removes the ORM scope and shows row-level security alone still does, and with
+forced RLS switched off that test fails, reaping both documents, so it is testing the database and
+not the ORM. Beat is one replica with `Recreate`, pinned by a manifest test, because every running
+beat sends every entry, including the two that coexist for a moment during a rolling update.
+
+Left open: a document whose task was never published stays PENDING, which is a different failure
+with different evidence, and the worker's grace period is still shorter than an ingestion, so a
+rollout strands in-flight documents and the sweep recovers them half an hour later.
+
 ## 2026-10-22 — M7 #26: the tracebacks went nowhere
 
 #26 asks for logs that let you follow one request end to end. **Before writing any, I checked what
