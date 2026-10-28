@@ -7,30 +7,18 @@ is scoped to a single tenant, and the AI only ever answers from that tenant's do
 
 ```mermaid
 flowchart TB
-    subgraph Client
-      FE[Next.js frontend]
-    end
-    subgraph API[Django REST API]
-      SEAM[Auth seam: verify token - resolve tenant - activate isolation]
-      RAG[RAG query engine]
-      COST[Cost & token accounting]
-    end
-    subgraph Async[Ingestion workers]
-      ING[parse - chunk - embed]
-    end
-    AUTH[Keycloak OIDC]
-    PG[(Postgres + pgvector - forced RLS)]
-    RDS[(Redis)]
-    LLM[LLM - Anthropic / Ollama]
-
-    FE -->|OIDC login| AUTH
-    FE -->|Bearer token| SEAM
-    SEAM -->|tenant-scoped| RAG
-    RAG -->|top-k retrieval| PG
-    RAG -->|grounded prompt| LLM
-    LLM -->|answer + citations| RAG
-    FE -->|upload| SEAM --> RDS --> ING --> PG
-    RAG --> COST
+    B([Browser]) -->|session cookie only| BFF["Next.js app + BFF<br/>keeps the token server-side"]
+    BFF <-->|OIDC code flow + PKCE| KC["Keycloak<br/>one realm per tenant"]
+    BFF -->|bearer token| API["Django REST API<br/>tenant from the verified token only"]
+    API -->|ingest task| R[(Redis)]
+    R --> W["Celery worker<br/>parse → chunk → embed"]
+    W -->|chunks + vectors| PG[("Postgres + pgvector<br/>scoped ORM + forced RLS")]
+    API -->|question| ASK["RAG engine<br/>guardrails → retrieve → ground → cite"]
+    ASK -->|top-k, own rows only| PG
+    ASK -->|grounded prompt| LLM["LLM<br/>Anthropic · Ollama locally"]
+    W & ASK -.-> EMB["Embeddings<br/>Voyage · Ollama locally"]
+    ASK -->|tokens + cost per answer| COST[Cost & token accounting]
+    ASK -.->|streamed answer + citations| BFF
 ```
 
 Isolation is not a single box in this diagram: the auth seam *activates* the tenant, and two
@@ -40,7 +28,9 @@ enforce it (see below).
 ## Components
 
 - **Frontend (Next.js).** Auth via OIDC, streaming chat with citation rendering, document
-  management. Talks only to tenant-scoped API endpoints.
+  management. Talks only to tenant-scoped API endpoints. The Next.js server is a backend for the
+  frontend: it runs the OIDC flow, keeps the token in its session, and calls the API on the
+  browser's behalf, so the browser only ever holds a session cookie (ADR-0013).
 - **Auth seam + tenant isolation.** The DRF authenticator verifies the OIDC bearer token and
   resolves the tenant **only** from a verified token claim (never from a header, query param, or
   body), then activates that tenant for the request. Isolation is enforced by **two independent
@@ -54,6 +44,8 @@ enforce it (see below).
 - **RAG query engine.** Embeds the question, retrieves top-k tenant-scoped chunks, builds a
   grounded prompt, calls the LLM, and enforces a structured answer-with-citations schema.
 - **Postgres + pgvector.** Relational data and vectors in the same tenant-scoped rows.
+- **Model providers.** Voyage for embeddings and Anthropic for answers in a deployment, with
+  Ollama standing in for both locally (ADR-0004, ADR-0020).
 - **Cost & token accounting.** Records tokens and estimated cost per request, per tenant.
 
 ## Key invariants
