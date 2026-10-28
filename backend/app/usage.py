@@ -206,5 +206,6 @@ def _daily_rows(
     by_day: dict[date, dict[str, object]] = {}
     for row in grouped:
         day = row.pop("day")
+        # Never None: a day is grouped only when it has rows, and the cost column is NOT NULL.
         by_day[day] = {**row, "estimated_cost_usd": row["estimated_cost_usd"].quantize(_CENTS)}
     return by_day
