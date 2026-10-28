@@ -23,7 +23,7 @@ A production-shaped RAG system built in the open — one reviewed PR per issue, 
 - **Retrieval quality is measured, not asserted.** `make eval` runs a curated question set through the real ingestion and retrieval path and reports precision@k, recall@k, hit@k and MRR, stamped with the embedder that produced them. First baselines: **hit@3 1.00, MRR 0.75** for retrieval; for grounding, **zero invented citations across 50 claims** but only **half the claims cited at all** and 18 stating a figure with nothing behind it. The harness also surfaced that the shipped similarity floor of `0.0` refused nothing, so the product could not decline a question it had no evidence for; the default is now `0.50`, taken from the measured gap between answerable and unanswerable questions (#88). Method, numbers and limitations: [`docs/evaluation.md`](docs/evaluation.md).
 - **Decisions are written down.** Seventeen [Architecture Decision Records](docs/adr) explain the _why_ behind the stack, isolation model, chunking, embeddings, streaming, the frontend, and deployment.
 
-**Status:** M0–M5 and M7 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers, the frontend that uses them, an evaluation harness that measures both retrieval and answer faithfulness, and request-traced logs with a per-workspace usage dashboard); M6 (deployment) in progress. See the [Roadmap](#roadmap).
+**Status:** M0–M5 and M7 complete (auth + two-layer isolation, full ingestion pipeline, grounded RAG query engine with streamed cited answers, the frontend that uses them, an evaluation harness that measures both retrieval and answer faithfulness, and request-traced logs with a per-workspace usage dashboard); M6 (deployment) under way: production images and a pipeline that deploys every green merge to main are in, and the live environment is next. See the [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -98,7 +98,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - **M3** ✅ RAG query engine — retrieval hardening, grounded generation, SSE streaming, guardrails, per-tenant limits & cost accounting
 - **M4** ✅ Frontend & streaming UX — app shell + OIDC via a BFF, design system, the streaming ask screen with clickable citations, and document management (upload with progress, live ingestion status, delete)
 - **M5** ✅ Evaluation harness — retrieval metrics and answer faithfulness, both measured against the real pipeline (`make eval`, `make eval-faithfulness`)
-- **M6** 🚧 Deployment & CI/CD — one-command Docker Compose stack landed
+- **M6** 🚧 Deployment & CI/CD — one-command Docker Compose stack, Kubernetes manifests, and a pipeline that builds production images and deploys every green merge to main ([docs/deployment.md](docs/deployment.md)); the live environment is next
 - **M7** ✅ Observability & cost dashboard — structured logs that follow one request from the API through retrieval and the model into the worker ([docs/observability.md](docs/observability.md)), a sweep that fails documents a dead worker left processing so they can be retried, and a usage page that charts each workspace's answers, tokens and estimated cost per day, over any range up to a year
 - **M8** ⬜ Polish & recruiter-ready docs
 
@@ -125,6 +125,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0019 — Deploying with Kustomize](docs/adr/0019-kubernetes-deployment.md)
 - [ADR-0020 — Voyage for embeddings, and one dimension everywhere](docs/adr/0020-production-embedding-and-llm-providers.md)
 - [ADR-0021 — The similarity floor, measured per embedder](docs/adr/0021-similarity-floor.md)
+- [ADR-0022 — Continuous deployment](docs/adr/0022-continuous-deployment.md)
 - [ADR-0023 — Reaping documents a dead worker left in PROCESSING](docs/adr/0023-reaping-stuck-ingestion.md)
 - [ADR-0024 — Structured logs that follow one request end to end](docs/adr/0024-structured-logging.md)
 - [ADR-0025 — A usage dashboard drawn from each workspace's own numbers](docs/adr/0025-usage-dashboard.md)

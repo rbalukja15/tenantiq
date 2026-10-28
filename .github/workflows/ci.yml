@@ -5,6 +5,13 @@ on:
   push:
     branches: [main]
 
+env:
+  # Where every green merge to main lands (#25, ADR-0022). The prod overlay pulls exactly these
+  # names; backend/tests/test_deploy.py fails if the two drift apart, because a digest pin for one
+  # name does nothing to an image the cluster knows by another.
+  BACKEND_IMAGE: ghcr.io/rbalukja15/tenantiq-backend
+  FRONTEND_IMAGE: ghcr.io/rbalukja15/tenantiq-frontend
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -102,3 +109,99 @@ jobs:
         # The only check that exercises the real Next/React compile path — server/client boundary
         # violations and bad `Link` hrefs pass lint and `tsc --noEmit` but fail here (#52).
         run: npm run build
+
+  images:
+    # Both production images, built on every pull request so that a broken Dockerfile fails the PR
+    # that broke it rather than the deploy after it, and pushed only from main (#25, ADR-0022).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    outputs:
+      backend: ${{ steps.backend.outputs.digest }}
+      frontend: ${{ steps.frontend.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to the GitHub container registry
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Backend image
+        id: backend
+        uses: docker/build-push-action@v7
+        with:
+          context: backend
+          push: ${{ env.PUSH == 'true' }}
+          # One tag per commit, never `latest`: the deploy pins the digest this step prints, and a
+          # tag that moves would let the cluster run something CI did not just test.
+          tags: ${{ env.BACKEND_IMAGE }}:sha-${{ github.sha }}
+          # Links the package to this repository, whose visibility it then inherits.
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Frontend image
+        id: frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: frontend
+          target: production
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ env.FRONTEND_IMAGE }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    # Every green merge to main, and nothing else. `needs` is what makes "green" true: if the tests
+    # or either image fail, this job is skipped and the cluster keeps running the last good release.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, images]
+    runs-on: ubuntu-latest
+    # Secrets for the cluster live on this environment, not on the repository, so that a protection
+    # rule (a required reviewer, a wait timer) can be added in Settings > Environments without
+    # editing this file.
+    environment: production
+    # A deploy that is running finishes before the next one starts: two at once would race on the
+    # migrate Job. A newer queued deploy replaces an older queued one, so main's head always wins.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Is there a cluster to deploy to?
+        id: cluster
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        # Until the production environment has a KUBECONFIG secret, a merge publishes the images and
+        # stops here, green, with a notice saying so. Failing would turn every merge red before
+        # anyone has rented a server.
+        run: |
+          if [ -z "$KUBECONFIG_CONTENT" ]; then
+            echo "::notice title=Not deployed::The images for this commit were pushed, but the production environment has no KUBECONFIG secret, so nothing was deployed. docs/deployment.md, 'Continuous deployment', lists what to set up."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.cluster.outputs.configured == 'true'
+      - name: Deploy
+        if: steps.cluster.outputs.configured == 'true'
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+          BACKEND_DIGEST: ${{ needs.images.outputs.backend }}
+          FRONTEND_DIGEST: ${{ needs.images.outputs.frontend }}
+        # kubectl is preinstalled on the runner. The script owns the order (secrets checked, then
+        # config, then migrations, then the workloads) so that CI and an operator run the same one.
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          ( umask 077 && printf '%s\n' "$KUBECONFIG_CONTENT" > "$KUBECONFIG" )
+          python3 scripts/deploy.py \
+            --backend "$BACKEND_IMAGE@$BACKEND_DIGEST" \
+            --frontend "$FRONTEND_IMAGE@$FRONTEND_DIGEST"

@@ -22,11 +22,13 @@ RUN pip install --require-hashes -r requirements.lock
 COPY pyproject.toml ./
 COPY app ./app
 COPY config ./config
-COPY manage.py ./
+COPY manage.py gunicorn.conf.py ./
 RUN pip install --no-deps -e .
 
 EXPOSE 8000
 
-# Default to the API server; the worker service overrides `command` in docker-compose.yml. The dev
-# stack mounts the source over /app (see compose) so runserver's autoreload picks up edits live.
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+# Default to the production API server (#25, ADR-0022); its settings are in gunicorn.conf.py, which
+# gunicorn reads from the working directory. Compose overrides `command` with runserver for the dev
+# stack, which mounts the source over /app so that runserver's autoreload picks up edits live, and
+# with celery for the worker.
+CMD ["gunicorn", "config.wsgi"]
