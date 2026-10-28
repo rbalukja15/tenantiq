@@ -1674,3 +1674,55 @@ beat sends every entry, including the two that coexist for a moment during a rol
 Left open: a document whose task was never published stays PENDING, which is a different failure
 with different evidence, and the worker's grace period is still shorter than an ingestion, so a
 rollout strands in-flight documents and the sweep recovers them half an hour later.
+
+## 2026-10-22 — M7 #26: the tracebacks went nowhere
+
+#26 asks for logs that let you follow one request end to end. **Before writing any, I checked what
+the logs said today, and in a deployment a server error said nothing.** With no `LOGGING` setting,
+Django sends `django.request` errors to a console handler that only prints under DEBUG, and to
+`mail_admins`, which has no admins to mail. Because that chain is not empty, Python's last-resort
+handler never runs either. So with DEBUG off, which is every deployment, a 500's traceback was
+printed nowhere. The app's own INFO lines were dropped as well, and its warnings printed as a bare
+message with no time, level or logger.
+
+**One `ContextVar` holds the fields, and a filter on the one handler copies them onto every
+record**, so Django's, Celery's and the SDKs' lines carry the request id and the tenant without
+knowing about either. The middleware opens a scope per request, the authenticator adds the tenant,
+and a Celery task runs inside the fields of the request that queued it: they travel in a message
+header, come back at `task_prerun`, and survive a retry because Celery republishes the headers. The
+answer path gained one line each for the search, the similarity floor and the generation. The floor
+line carries the best score, which is the number that explains a refusal, and the generation line
+says how the answer ended, which model gave it, the time to first token, and the same token
+estimates the usage row is charged with. None of them carries a question, an answer or a passage;
+T15 in the threat model says why.
+
+**The streamed answer was the hard part, and my first version was wrong in a way production would
+not have shown.** The body runs after the middleware has returned, so the middleware wraps it. I
+first set the fields at the first frame and held them to the last, which covered a client that
+hangs up: Django closes the view's own generator before the wrapper, so the view's cleanup, the
+usage row and the generation line, runs while the wrapper is still suspended. But two answers
+iterated in turn on one thread then swap fields, and a test that interleaves two tenants' answers,
+as the usage tests already do, showed the first answer's generation line logged under the second's
+request and tenant. Gunicorn's threads send one response at a time, so production would not have
+hit it; the test client did. Now each frame is produced inside its request's fields, which are
+reset before the frame is sent, and the response's whole `close()` runs inside them, since that is
+where a hang-up is cleaned up.
+
+Three smaller things came out of the tests. Django logs a 4xx that a view returned only after the
+whole middleware chain has returned, so that line had no request id; the middleware now leaves the
+fields on the request, and the filter reads them off the record. The Celery tests passed alone and
+failed in the full suite, because the first eager `delay()` anywhere builds the app's producer pool
+against Redis and keeps it, so a later publish meant for the in-memory broker went to Redis instead.
+And reading the Anthropic SDK showed it logs each request whole at DEBUG, prompt and passages
+included, so `TENANTIQ_LOG_LEVEL=DEBUG` would have copied tenant content into the logs. Django's
+loggers and the SDK's now stop at INFO, and a test shows it.
+
+I ran it for real with gunicorn, Redis and a worker. An upload's request line in the API's log and
+its ingestion and `succeeded` lines in the worker's share the request id and the tenant, and a
+query's search, floor, generation and request lines follow in order. `docs/observability.md` has the
+`jq` that joins them, and the BFF now relays `X-Request-ID`, so whoever reports a failure has the id
+in their browser's network tab.
+
+Left open: gunicorn's own lines are still in its format with no request id, Celery's "received" line
+comes before the task's fields exist, and the BFF logs nothing. OpenTelemetry waits for a collector
+to send spans to; the request id is what a trace id would replace.

@@ -251,6 +251,7 @@ describe("proxy — response headers", () => {
             "cache-control": "no-cache",
             "retry-after": "5",
             "x-accel-buffering": "no",
+            "x-request-id": "3f2a9c",
             "set-cookie": "evil=1; Path=/",
             "content-length": "9999",
             "www-authenticate": 'Bearer realm="api"',
@@ -264,6 +265,7 @@ describe("proxy — response headers", () => {
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(response.headers.get("retry-after")).toBe("5");
     expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expect(response.headers.get("x-request-id")).toBe("3f2a9c");
     // The proxy must not become a cookie-write channel onto our own origin — double-submit assumes
     // only the BFF writes cookies here.
     expect(response.headers.getSetCookie()).toEqual([]);

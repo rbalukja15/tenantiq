@@ -16,6 +16,10 @@ x-backend-env: &backend-env
   OLLAMA_BASE_URL: http://ollama:11434
   MEDIA_ROOT: /app/media
   DJANGO_DEBUG: "true"
+  # Empty means the default for a debug stack, readable text (#26, ADR-0024). json prints what a
+  # deployment does.
+  TENANTIQ_LOG_FORMAT: ${TENANTIQ_LOG_FORMAT:-}
+  TENANTIQ_LOG_LEVEL: ${TENANTIQ_LOG_LEVEL:-INFO}
   DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver,backend
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-change-me}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

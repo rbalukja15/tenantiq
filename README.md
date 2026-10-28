@@ -99,7 +99,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - **M4** ✅ Frontend & streaming UX — app shell + OIDC via a BFF, design system, the streaming ask screen with clickable citations, and document management (upload with progress, live ingestion status, delete)
 - **M5** ✅ Evaluation harness — retrieval metrics and answer faithfulness, both measured against the real pipeline (`make eval`, `make eval-faithfulness`)
 - **M6** 🚧 Deployment & CI/CD — one-command Docker Compose stack landed
-- **M7** ⬜ Observability & cost dashboard
+- **M7** 🚧 Observability & cost dashboard — structured logs that follow one request from the API through retrieval and the model into the worker ([docs/observability.md](docs/observability.md))
 - **M8** ⬜ Polish & recruiter-ready docs
 
 ## Key engineering decisions
@@ -126,6 +126,7 @@ Progress is tracked in [GitHub issues](https://github.com/rbalukja15/tenantiq/is
 - [ADR-0020 — Voyage for embeddings, and one dimension everywhere](docs/adr/0020-production-embedding-and-llm-providers.md)
 - [ADR-0021 — The similarity floor, measured per embedder](docs/adr/0021-similarity-floor.md)
 - [ADR-0023 — Reaping documents a dead worker left in PROCESSING](docs/adr/0023-reaping-stuck-ingestion.md)
+- [ADR-0024 — Structured logs that follow one request end to end](docs/adr/0024-structured-logging.md)
 
 ## License
 
