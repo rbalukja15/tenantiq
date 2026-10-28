@@ -79,7 +79,9 @@ def bind_log_context(**fields: str) -> None:
 
     For a value that becomes known partway through a scope, as the tenant does at authentication.
     There is no token to undo it with, deliberately: the scope that opened the fields restores what
-    came before it as a whole, which discards these too.
+    came before it as a whole, which discards these too. Called outside any scope (a management
+    command, or a test calling the authenticator directly), they last as long as that context does;
+    the next :func:`log_scope` still starts clean, since a scope replaces rather than adds.
     """
     _fields.set(MappingProxyType({**_fields.get(), **fields}))
 
