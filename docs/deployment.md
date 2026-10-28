@@ -106,7 +106,7 @@ Migration `0014` widens the embedding column from 768 to 1024 and **discards eve
 chunks and offsets; only the vectors go, and retrieval returns nothing until they are rebuilt:
 
 ```bash
-kubectl -n $NS exec deploy/tenantiq-backend -- python manage.py backfill_embeddings
+kubectl -n tenantiq exec deploy/tenantiq-backend -- python manage.py backfill_embeddings
 ```
 
 It only touches chunks with no embedding, or one from another model, so it is idempotent and
@@ -156,8 +156,8 @@ it has not reached yet and fail in ways that look like application bugs.
 ### 5. Verify
 
 ```bash
-kubectl -n $NS get pods
-kubectl -n $NS logs deploy/tenantiq-backend --tail=50
+kubectl -n tenantiq get pods
+kubectl -n tenantiq logs deploy/tenantiq-backend --tail=50
 ```
 
 There is no `/healthz` yet, so the probes are TCP — a pod whose database is unreachable is still
