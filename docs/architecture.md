@@ -25,6 +25,10 @@ Isolation is not a single box in this diagram: the auth seam *activates* the ten
 independent layers — a tenant-scoped ORM manager and forced Postgres row-level security — each
 enforce it (see below).
 
+It is the README's diagram with one edge more, the tokens and estimated cost each answer records
+for its tenant. The README leaves that edge out to keep its overview to the two paths a request
+takes; the components below describe both.
+
 ## Components
 
 - **Frontend (Next.js).** Auth via OIDC, streaming chat with citation rendering, document
