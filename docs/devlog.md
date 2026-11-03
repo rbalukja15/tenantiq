@@ -1822,3 +1822,22 @@ pipeline alone and the live demo moves to its own issue. Nothing in the pipeline
 merge to main still builds and publishes both images, and the deploy job stays a green no-op until
 the `production` environment has a `KUBECONFIG` secret. The README no longer promises a demo link;
 `make dev` is the way to see the whole system run.
+
+## 2026-11-03 — M6 #25: what a pull request's token can do
+
+Review asked for two things in the workflow: `packages: write` only where something is pushed, and
+actions pinned by commit rather than tag. The first takes two jobs, because a job's permissions
+cannot depend on the event: `images` builds both images on a pull request with a read-only token,
+and `publish` runs the same builds on main and pushes them. Two copies of a build can drift, and the
+reason to build on a pull request is that it builds what main will ship, so a test fails if the two
+differ in anything but `push`. The workflow's default is now read-only as well, so a job that names
+no permissions never inherits a wider repository setting.
+
+The pins are the commits the runner itself resolved the tags to, read from the "Download action
+repository" lines in this pull request's own job logs, so they are exactly the code CI had been
+running. Dependabot proposes new ones weekly, as one grouped pull request, and its first will have
+something in it: the same logs warn that checkout, setup-python and setup-node still target Node 20,
+which GitHub now forces onto Node 24.
+
+The third point, a kubeconfig left on the runner, needed only a comment: the runner empties
+`RUNNER_TEMP` at the end of every job.

@@ -167,11 +167,15 @@ marked Ready. Read the logs on a first deploy rather than trusting green pods.
 
 `.github/workflows/ci.yml` releases on its own (#25, ADR-0022):
 
-- **On a pull request** it builds both images without pushing them, so a broken Dockerfile fails
-  the pull request that broke it.
-- **On a push to main** it pushes both as `sha-<commit>`. If both test jobs passed too, the `deploy`
+- **On a pull request** the `images` job builds both images without pushing them, so a broken
+  Dockerfile fails the pull request that broke it. Its token is read-only, so a pull request cannot
+  publish an image.
+- **On a push to main** the `publish` job runs the same builds and pushes both as `sha-<commit>`.
+  It is the only job whose token can write packages. If both test jobs passed too, the `deploy`
   job runs `scripts/deploy.py` with the digests it has just pushed, in the GitHub environment
   `production`, one deploy at a time.
+- **Every action is pinned to a commit**, with the tag it came from as a comment, and Dependabot
+  proposes new pins once a week (`.github/dependabot.yml`).
 - **Until `production` has a `KUBECONFIG` secret**, that job stops with a notice and stays green:
   the images are published and nothing is deployed.
 

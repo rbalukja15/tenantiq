@@ -7,15 +7,17 @@ drive the script against a recording stand-in for kubectl, so the order is check
 without a cluster. The one that renders the real overlay needs kubectl, and follows the same skip
 and ``TENANTIQ_REQUIRE_KUBECTL`` rule as test_k8s_manifests.py.
 
-The last tests read .github/workflows/ci.yml, because two properties of the pipeline are only true
-while that file says so: it deploys nothing that is not a green push to main, and it pushes images
-under the same names the prod overlay pulls.
+The last tests read .github/workflows/ci.yml, because some properties of the pipeline are only true
+while that file says so: it deploys nothing that is not a green push to main, it pushes images
+under the same names the prod overlay pulls, only a push to main can publish one, a pull request
+builds what main will ship, and every action runs from a pinned commit.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -298,11 +300,62 @@ def test_only_a_green_push_to_main_deploys():
     assert "github.event_name == 'push'" in job["if"]
     assert "github.ref == 'refs/heads/main'" in job["if"]
     # A failed test job or image build skips the deploy, so the cluster keeps its last good release.
-    assert {"backend", "frontend", "images"} <= set(job["needs"])
+    assert {"backend", "frontend", "publish"} <= set(job["needs"])
 
 
 def test_the_image_ci_ships_for_the_frontend_is_the_production_target():
-    steps = _workflow()["jobs"]["images"]["steps"]
+    steps = _workflow()["jobs"]["publish"]["steps"]
     frontend = next(step for step in steps if step.get("id") == "frontend")
 
     assert frontend["with"]["target"] == "production"
+
+
+def _builds(job: dict) -> dict[str, dict]:
+    return {
+        step["name"]: step for step in job["steps"] if "build-push-action" in step.get("uses", "")
+    }
+
+
+def test_only_a_push_to_main_can_publish_an_image():
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    writers = {
+        name for name, job in jobs.items() if job.get("permissions", {}).get("packages") == "write"
+    }
+
+    # A job's permissions cannot depend on the event, so pushing has a job of its own: a pull
+    # request's token never holds packages: write, whatever its build steps say.
+    assert workflow["permissions"] == {"contents": "read"}
+    assert writers == {"publish"}
+    assert "github.event_name == 'push'" in jobs["publish"]["if"]
+    assert "github.ref == 'refs/heads/main'" in jobs["publish"]["if"]
+    assert jobs["images"]["if"] == "github.event_name == 'pull_request'"
+    assert all(step["with"]["push"] is False for step in _builds(jobs["images"]).values())
+
+
+def test_a_pull_request_builds_what_main_publishes():
+    jobs = _workflow()["jobs"]
+    built, published = _builds(jobs["images"]), _builds(jobs["publish"])
+
+    assert built.keys() == published.keys() == {"Backend image", "Frontend image"}
+    for name, step in built.items():
+        assert step["uses"] == published[name]["uses"]
+        assert published[name]["with"]["push"] is True
+        # Everything but `push`, the context and target above all, is what the pull request vouched
+        # for when its build passed.
+        assert {key: value for key, value in step["with"].items() if key != "push"} == {
+            key: value for key, value in published[name]["with"].items() if key != "push"
+        }
+
+
+def test_every_action_runs_from_a_pinned_commit():
+    uses = re.findall(r"^\s*(?:- )?uses: (.+)$", WORKFLOW.read_text("utf-8"), flags=re.MULTILINE)
+
+    assert uses
+    for reference in uses:
+        # A tag can be moved to other code and a commit cannot, and the deploy job holds a credential
+        # that can change the cluster. The comment names the tag the commit was resolved from.
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+(\.\d+)*", reference), reference
+    # Pins nobody moves go stale, so something has to propose the next ones.
+    dependabot = yaml.safe_load((REPO_ROOT / ".github" / "dependabot.yml").read_text("utf-8"))
+    assert "github-actions" in {update["package-ecosystem"] for update in dependabot["updates"]}

@@ -54,7 +54,14 @@ and a green push to main deploys it by digest through one script that owns the o
   the Deployments and wait for each rollout. It refuses an image that is not digest-pinned, a render
   whose images do not match the pins, and an overlay that still names `example.com`.
   `tests/test_deploy.py` drives it against a recording stand-in for kubectl.
-- **The deploy job runs only for a push to main, after both test jobs and the image build pass**,
+- **Only the push to main can write packages.** A job's permissions cannot depend on the event, so
+  the pull-request build (`images`, with a read-only token) and the push (`publish`, the one job
+  with `packages: write`) are separate jobs with the same build steps, and a test fails if they
+  differ in anything but `push`. The workflow's default permission is `contents: read`.
+- **Every action is pinned to a commit**, with its tag as a comment, and Dependabot proposes new
+  pins weekly. A tag can be moved to other code, and the deploy job holds a credential that can
+  change the cluster.
+- **The deploy job runs only for a push to main, after both test jobs and the image push pass**,
   in a GitHub environment named `production`, one deploy at a time. Until that environment has a
   `KUBECONFIG` secret, the job is a green no-op with a notice: images are published and nothing
   deploys.
@@ -97,6 +104,8 @@ and long answers work under a production server, and that is tested rather than 
   the repository goes private, the cluster needs an image pull secret.
 - *Two image builds on every pull request.* They run beside the test jobs, so they cost runner
   minutes rather than time to a result.
+- *The build steps exist twice*, once per job, held equal by a test rather than by structure.
+- *A Dependabot pull request a week* for the actions, which someone has to read and merge.
 
 **Left open, deliberately.** The host itself, and its specifics (ingress controller, storage class),
 are the operator's choice. None is rented yet (2026-11-03): the project runs at no cost, so there is
