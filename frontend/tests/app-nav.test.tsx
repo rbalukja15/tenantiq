@@ -14,11 +14,12 @@ const pathname = vi.fn(() => "/");
 vi.mock("next/navigation", () => ({ usePathname: () => pathname() }));
 
 describe("AppNav", () => {
-  it("reaches both surfaces of the app", () => {
+  it("reaches every surface of the app", () => {
     render(<AppNav />);
 
     expect(screen.getByRole("link", { name: "Ask" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "Documents" })).toHaveAttribute("href", "/documents");
+    expect(screen.getByRole("link", { name: "Usage" })).toHaveAttribute("href", "/usage");
   });
 
   it("says which section you are in, rather than only colouring it", () => {

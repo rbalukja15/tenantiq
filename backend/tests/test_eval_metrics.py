@@ -10,7 +10,9 @@ from __future__ import annotations
 import pytest
 
 from app.eval.dataset import DatasetError, Dataset, Document, Question, load_dataset
+from app.eval.harness import OutOfCorpusResult, QuestionResult, Report
 from app.eval.report import _verdict_on_configured_floor
+from app.eval.run import main
 from app.eval.metrics import (
     hit_at_k,
     is_relevant,
@@ -221,3 +223,72 @@ class TestFloorVerdict:
         verdict = _verdict_on_configured_floor(0.5, low=0.558, high=0.403)
 
         assert "sits inside that window" in verdict
+
+
+def _report(*, answerable: float, unanswerable: float) -> Report:
+    """A one-question run whose best match scored ``answerable``, against an off-topic question
+    whose best match scored ``unanswerable``: its separation gap is the difference."""
+    asked = Question(
+        id="payment-period",
+        question="How many days does the customer have to pay?",
+        markers=("forty-five (45) days",),
+        expected_document="terms.txt",
+    )
+    off_topic = Question(
+        id="capital-of-peru",
+        question="What is the capital of Peru?",
+        markers=(),
+        expected_document="",
+    )
+    return Report(
+        embedder_model="mxbai-embed-large",
+        embedder_class="OllamaEmbedder",
+        embedding_dim=1024,
+        top_k=5,
+        min_similarity=0.5,
+        chunk_target_tokens=800,
+        chunk_overlap_tokens=100,
+        document_count=1,
+        chunk_count=1,
+        corpus_chars=64,
+        results=(
+            QuestionResult(
+                question=asked,
+                total_relevant=1,
+                relevance=(True,),
+                top_similarity=answerable,
+                retrieved_titles=("terms.txt",),
+            ),
+        ),
+        out_of_corpus=(OutOfCorpusResult(question=off_topic, top_similarity=unanswerable),),
+    )
+
+
+class TestExitStatus:
+    """``make eval`` fails when no similarity floor can work (#88).
+
+    A negative gap means every floor either admits a question the corpus cannot answer or refuses one
+    it can. Printed as one more number in a table, that is how a product loses its only way of
+    declining without anyone noticing; as an exit status it stops a pipeline.
+    """
+
+    def test_a_gap_no_floor_can_sit_in_fails_the_run(self, monkeypatch, capsys):
+        report = _report(answerable=0.40, unanswerable=0.47)
+        monkeypatch.setattr("app.eval.harness.evaluate", lambda **_: report)
+
+        assert main([]) == 1
+        assert "no TENANTIQ_RETRIEVAL_MIN_SIMILARITY separates" in capsys.readouterr().err
+
+    def test_a_gap_of_exactly_zero_fails_it_too(self, monkeypatch):
+        # Equal scores: every floor keeps both questions or drops both.
+        report = _report(answerable=0.45, unanswerable=0.45)
+        monkeypatch.setattr("app.eval.harness.evaluate", lambda **_: report)
+
+        assert main([]) == 1
+
+    def test_a_positive_gap_passes(self, monkeypatch, capsys):
+        report = _report(answerable=0.567, unanswerable=0.441)
+        monkeypatch.setattr("app.eval.harness.evaluate", lambda **_: report)
+
+        assert main([]) == 0
+        assert "FAIL" not in capsys.readouterr().err

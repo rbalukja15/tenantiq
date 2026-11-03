@@ -13,6 +13,7 @@ from rest_framework import authentication, exceptions
 
 from app.auth.tenancy import get_or_create_user_and_membership
 from app.auth.verifier import TokenError
+from app.log_context import bind_log_context
 from app.tenant_context import activate_tenant
 
 
@@ -38,6 +39,10 @@ class TenantOIDCAuthentication(authentication.BaseAuthentication):
         # Activate both isolation layers for the rest of this request: the contextvar (Layer 1)
         # and, on Postgres, the SET LOCAL GUC the RLS policy reads (Layer 2). See ADR-0002.
         activate_tenant(tenant)
+        # Name the tenant on the request's log lines (#26, ADR-0024), including the ones logged
+        # after the tenant context is cleared: the end of a streamed answer, the request line. A
+        # label only; nothing reads it back to scope anything.
+        bind_log_context(tenant_id=str(tenant.id))
         return (user, parts[1])
 
     def authenticate_header(self, request) -> str:

@@ -113,9 +113,12 @@ includes three questions the corpus cannot answer, purely to measure **separatio
 | Gap                               | **+0.126** |
 
 A floor anywhere in `(0.441, 0.567)` refuses every unanswerable question while still answering every
-answerable one. **The shipped default is still `0.0`, which refuses nothing** — every question gets
-sources whether or not the corpus has an answer, and the refusal state the UI builds (ADR-0016) is
-unreachable in a default deployment. That is #88, and on this corpus `0.50` sits inside the window.
+answerable one. **The shipped default is `0.50`** (#88, ADR-0021): 0.059 above the best unanswerable
+question and 0.067 below the worst answerable one. Until #88 it was `0.0`, which refuses nothing —
+every question got sources whether or not the corpus had an answer, and the refusal state the UI
+builds (ADR-0016) was unreachable in a default deployment. A test pins the default inside this
+window: a floor at or below the best unanswerable score (`0.0` included), or at or above the worst
+answerable one, fails the suite.
 
 Note the gap **narrowed** (+0.155 → +0.126) even as every ranking metric improved. The two are not
 the same property: a better embedder pulls related text closer together, which helps ranking and
@@ -123,8 +126,12 @@ makes the answerable/unanswerable boundary tighter, not wider. A model that rank
 automatically a model that refuses better.
 
 The window is corpus- and embedder-specific and must be re-derived, not copied, once the eval runs
-against `voyage-4` — the width matching does not make the geometry match. The gap being positive at
-all is the useful part: it means a threshold _can_ separate the two, which is not guaranteed.
+against `voyage-4` — the width matching does not make the geometry match. That is why production
+does not inherit `0.50`: the prod overlay keeps `0.0` until a run against `voyage-4` has measured its
+own window, and then takes a value from inside it. The gap being positive at all is the useful
+part: it means a threshold _can_ separate the two, which is not guaranteed. When it is not,
+`make eval` exits 1 rather than printing the gap as one more number: no floor can work at that
+point, and the fix is a better embedder or a different refusal signal, not tuning.
 
 Note that the floor does not affect the metrics above — they are measured on raw nearest-neighbour
 results, because a threshold hiding a relevant chunk would show up as a retrieval failure rather than

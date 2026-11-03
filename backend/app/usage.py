@@ -9,8 +9,9 @@ Production AI means knowing what each tenant costs. This module owns three thing
   query. It establishes tenant context itself: the streaming answer (#48) finishes *after* the
   request transaction has committed and after the middleware cleared the tenant contextvar, so a
   recorder that assumed an ambient tenant would either write nothing or raise.
-- **Reporting.** :func:`usage_summary` aggregates the *current tenant's* rows over a time range. It
-  reads through the tenant-scoped manager, so a tenant can only ever aggregate its own spend.
+- **Reporting.** :func:`usage_summary` aggregates the *current tenant's* rows over a time range, and
+  :func:`usage_by_day` breaks a range down by day for the usage dashboard (#27). Both read through
+  the tenant-scoped manager, so a tenant can only ever aggregate its own spend.
 
 Token counts are **estimates**: the streaming path yields text deltas and exposes no provider usage
 numbers, so tokens are estimated from the prompt and the answer with the same chars-per-token
@@ -20,11 +21,12 @@ what it is — see ADR-0012 for the limits and the path to exact provider counts
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.conf import settings
-from django.db.models import Count, Sum
+from django.db.models import Count, QuerySet, Sum
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 
 from app.chunking import estimate_tokens as _estimate_tokens
@@ -38,6 +40,13 @@ _PER_MILLION = Decimal(1_000_000)
 
 #: How far back :func:`usage_summary` looks when no explicit range is given.
 DEFAULT_WINDOW = timedelta(days=30)
+
+#: The days :func:`usage_by_day` covers when no range is given: today and the 29 before it.
+DEFAULT_DAYS = 30
+
+#: The longest range :func:`usage_by_day` reports: a year, leap day included. Every day is an entry
+#: in the response and a point on the dashboard's charts, so this bounds both.
+MAX_DAYS = 366
 
 
 def estimate_tokens(text: str) -> int:
@@ -134,3 +143,69 @@ def usage_summary(
         "output_tokens": totals["output_tokens"] or 0,
         "estimated_cost_usd": totals["estimated_cost_usd"] or Decimal("0"),
     }
+
+
+def utc_today() -> date:
+    """Today's date in UTC, the calendar :func:`usage_by_day` counts days in."""
+    return timezone.now().astimezone(dt_timezone.utc).date()
+
+
+def usage_by_day(*, first: date, last: date) -> dict[str, object]:
+    """The **current tenant's** usage for each UTC day from ``first`` to ``last`` inclusive (#27).
+
+    Every day of the range has an entry, zeros included, so a chart draws the range as it was: a day
+    with no answers cost nothing, and leaving it out would draw a line straight across it. Days are
+    UTC calendar days, because a stored row has an instant and no reader's timezone.
+
+    One grouped statement produces every day, and the totals are the sum of those days, so they can
+    never disagree with the days they summarise. Like :func:`usage_summary` it reads through the
+    tenant-scoped manager, so it raises rather than summing across tenants when no tenant is active.
+    """
+    if last < first:
+        raise ValueError("'first' must not be after 'last'.")
+    start = datetime.combine(first, time.min, tzinfo=dt_timezone.utc)
+    end = datetime.combine(last + timedelta(days=1), time.min, tzinfo=dt_timezone.utc)
+    by_day = _daily_rows(UsageRecord.objects.all(), start=start, end=end)
+
+    zero: dict[str, object] = {
+        "requests": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        # At the column's six places, like every summed day, so each entry prints the same way.
+        "estimated_cost_usd": Decimal(0).quantize(_CENTS),
+    }
+    days = [
+        {"date": day, **by_day.get(day, zero)}
+        for day in (first + timedelta(days=n) for n in range((last - first).days + 1))
+    ]
+    totals = {
+        key: sum((d[key] for d in days), start=start_value) for key, start_value in zero.items()
+    }
+    return {"first": first, "last": last, "days": days, "totals": totals}
+
+
+def _daily_rows(
+    records: QuerySet[UsageRecord], *, start: datetime, end: datetime
+) -> dict[date, dict[str, object]]:
+    """Sum ``records`` per UTC day in ``[start, end)``, keyed by day. Days with no rows are absent.
+
+    Takes the queryset rather than reading ``UsageRecord.objects`` itself so a test can hand it the
+    unscoped manager and show that row-level security alone still keeps the sums to one tenant.
+    """
+    grouped = (
+        records.filter(created_at__gte=start, created_at__lt=end)
+        .annotate(day=TruncDate("created_at", tzinfo=dt_timezone.utc))
+        .values("day")
+        .annotate(
+            requests=Count("id"),
+            input_tokens=Sum("input_tokens"),
+            output_tokens=Sum("output_tokens"),
+            estimated_cost_usd=Sum("estimated_cost_usd"),
+        )
+    )
+    by_day: dict[date, dict[str, object]] = {}
+    for row in grouped:
+        day = row.pop("day")
+        # Never None: a day is grouped only when it has rows, and the cost column is NOT NULL.
+        by_day[day] = {**row, "estimated_cost_usd": row["estimated_cost_usd"].quantize(_CENTS)}
+    return by_day

@@ -98,6 +98,8 @@ const REQUIRED_COLOURS = [
   "--warn-wash",
   "--crit",
   "--crit-wash",
+  "--series-1",
+  "--series-2",
 ];
 
 describe.each(["light", "dark"] as const)("%s theme completeness", (theme) => {
@@ -155,6 +157,10 @@ const TEXT_PAIRS: [string, string][] = [
 const UI_PAIRS: [string, string][] = [
   ["--rule-strong", "--surface"], // a text input's edge, on a card
   ["--rule-strong", "--paper"], // and on the page ground
+  // A chart's line is the data itself, not decoration, so it owes the graphical-object 3:1 against
+  // the card it is drawn on (#27).
+  ["--series-1", "--surface"],
+  ["--series-2", "--surface"],
 ];
 
 describe.each(["light", "dark"] as const)("%s theme contrast", (theme) => {

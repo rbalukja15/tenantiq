@@ -53,6 +53,10 @@ retrieval applies a configurable similarity floor and refuses rather than pads.*
   the right threshold depends on the embedding model's similarity distribution, which the M5 eval
   harness will calibrate. A too-aggressive default would silently refuse answerable questions.
 
+  **Superseded by ADR-0021 (#88).** The calibration showed that 0.0 is not conservative but inert:
+  text embeddings score effectively always above it, so it refused nothing and the refusal path was
+  unreachable in a default deployment. The default is now 0.50, measured on `mxbai-embed-large`.
+
 ### Rejected alternatives
 
 - **A retrieval/prompt framework (LangChain / LlamaIndex).** A `Retriever` + `PromptTemplate` would

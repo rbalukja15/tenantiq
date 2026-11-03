@@ -1,0 +1,109 @@
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lede {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+  max-width: var(--measure);
+}
+
+/* One row above everything it scopes: the presets first, the custom range after them. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4) var(--space-5);
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--sunken);
+  border-radius: var(--radius-md);
+}
+
+.preset {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-decoration: none;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+.preset:hover {
+  color: var(--ink);
+}
+
+/* Selected is said in words too, by `aria-current`; the raised chip is only what the eye sees. */
+.current {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 0 0 var(--border) var(--rule);
+}
+
+.custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+/* The headline numbers, before any chart: most readers came for one of these four. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: var(--border) solid var(--rule);
+  border-radius: var(--radius-md);
+}
+
+.tile dt {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+
+/* Mono: these are the facts the page reports, to be checked against the table below. */
+.tile dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+
+.charts {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.table summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--space-2) 0;
+}
+
+.action {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}

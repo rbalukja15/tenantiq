@@ -82,6 +82,15 @@ def _isolate_tenant_context():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_log_context():
+    """Start every test with no log fields, and drop whatever it bound (#26)."""
+    from app.log_context import log_scope
+
+    with log_scope():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_throttle_cache():
     """Reset the throttle/quota cache between tests (#49).
 
@@ -95,6 +104,19 @@ def _reset_throttle_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture
+def no_similarity_floor(settings):
+    """Admit every source retrieval finds, for tests about what happens *after* retrieval (#88).
+
+    The shipped floor was measured on mxbai-embed-large, and the suite embeds with the hashing
+    embedder, whose similarities count shared words on a different scale: at the shipped floor most
+    of these tests' questions would be refused, and a test of streaming, usage accounting or tenant
+    isolation would quietly become a test of the refusal path. 0.0 keeps anything at least
+    orthogonal to the question. The floor itself is covered in ``test_similarity_floor.py``.
+    """
+    settings.TENANTIQ_RETRIEVAL_MIN_SIMILARITY = 0.0
 
 
 @pytest.fixture(scope="session")

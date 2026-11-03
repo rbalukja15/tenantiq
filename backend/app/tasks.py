@@ -3,7 +3,9 @@
 Thin wrapper over :func:`app.ingestion.run_ingestion`. ``ParseError`` is handled inside as a
 permanent failure (document → FAILED); any other exception propagates and is retried with backoff
 as a transient failure. When those retries are exhausted, :class:`IngestTask.on_failure` records
-the terminal failure on the document so it never sits silently stuck in PROCESSING.
+the terminal failure on the document so it never sits silently stuck in PROCESSING. A worker that
+dies outright never gets that far, so :func:`sweep_stuck_documents` runs on Celery beat's schedule to
+reap what it left behind (#55).
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from celery import Task, shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 
-from app.ingestion import mark_ingestion_failed, run_ingestion
+from app.ingestion import mark_ingestion_failed, reap_stuck_documents, run_ingestion
 
 
 class IngestTask(Task):
@@ -51,3 +53,15 @@ def ingest_document(self, document_id, tenant_id) -> None:
         # task does not retry. (run_ingestion also handles a soft-limit hit inside its own work; this
         # covers a hit in the thin window outside that block.)
         mark_ingestion_failed(document_id, tenant_id, exc)
+
+
+@shared_task(ignore_result=True)
+def sweep_stuck_documents() -> int:
+    """Reap documents a dead worker left in PROCESSING (#55, ADR-0023).
+
+    Sent every ``TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS`` by Celery beat (``CELERY_BEAT_SCHEDULE``)
+    and run by an ordinary worker. A sweep that waits behind long ingestions still runs, late, and
+    a sweep that finds nothing costs one query per tenant, so sweeps that pile up while no worker is
+    consuming are harmless.
+    """
+    return reap_stuck_documents()

@@ -228,7 +228,7 @@ def _consume(response) -> list[tuple[str, dict]]:
 
 @requires_postgres
 def test_query_endpoint_streams_an_answer_that_closes_with_real_citations(
-    configured_auth, mint_token
+    configured_auth, mint_token, no_similarity_floor
 ):
     acme = _tenant("acme")
     _seed(acme, ["Invoice payment terms are net thirty days after receipt."])
@@ -275,7 +275,9 @@ def test_query_endpoint_requires_authentication():
 
 
 @requires_postgres
-def test_query_endpoint_holds_no_db_transaction_open_during_generation(configured_auth, mint_token):
+def test_query_endpoint_holds_no_db_transaction_open_during_generation(
+    configured_auth, mint_token, no_similarity_floor
+):
     # Acceptance (ADR-0009): retrieval happens inside the request; the model call must not run with a
     # DB transaction held open. So the streaming body issues **no retrieval work** — no document or
     # chunk query, and nothing at all until the model has finished.
@@ -312,7 +314,7 @@ def test_query_endpoint_holds_no_db_transaction_open_during_generation(configure
 
 @requires_postgres
 def test_query_endpoint_cannot_surface_or_cite_another_tenants_chunks(
-    configured_auth, mint_token, settings
+    configured_auth, mint_token, settings, no_similarity_floor
 ):
     # Stream via an LLM that echoes the sources it was given, so a retrieval leak would surface the
     # other tenant's text in the answer — giving the surface-text assertion real teeth. `ACMESECRET`
@@ -339,6 +341,31 @@ def test_query_endpoint_cannot_surface_or_cite_another_tenants_chunks(
     assert not (cited_ids & acme_ids)  # never cites Acme's chunks...
     body = "".join(json.dumps(d) for _, d in frames)
     assert "ACMESECRET" not in body  # ...and Acme's chunk text never reaches the stream
+
+
+@requires_postgres
+def test_a_question_nothing_supports_is_refused_on_the_wire_at_the_shipped_floor(
+    configured_auth, mint_token, settings
+):
+    # #88: until the floor was raised from 0.0, this question was answered from the nearest
+    # passages the tenant had, however unrelated, and the refusal this stream now carries (rendered
+    # as the NoEvidence state, ADR-0016) was unreachable in a default deployment. Nothing here
+    # overrides the floor: the tenant has a corpus, the question shares no word with it, and the
+    # model must never be asked.
+    settings.TENANTIQ_LLM_FACTORY = lambda: _ExplodingLLM()
+    _seed(_tenant("acme"), ["Invoice payment terms are net thirty days after receipt."])
+
+    response = APIClient().post(
+        "/api/query",
+        {"question": "Who painted Mona Lisa?"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {mint_token(sub='alice')}",
+    )
+
+    assert response.status_code == 200
+    frames = _consume(response)
+    assert [d for e, d in frames if e == "citations"] == [{"citations": [], "refused": True}]
+    assert not [e for e, _ in frames if e == "error"]
 
 
 # --- Is this a refusal, or an answer that happened to cite nothing? (#19) --------------------------

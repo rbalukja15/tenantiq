@@ -1,0 +1,59 @@
+# Celery beat (#55, ADR-0023): the scheduler that sends `app.tasks.sweep_stuck_documents` every
+# TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS. It runs no tasks itself; the worker does. The sweep fails
+# documents a dead worker left in PROCESSING, which nothing else would ever finish.
+#
+# Exactly one, and replaced rather than rolled. Beat holds the schedule in memory and sends whatever
+# is due, so a second one, even for the overlap of a rolling update, sends every entry twice. Today's
+# only entry is idempotent, so that would cost a few queries; it is still not a property to build on.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenantiq-beat
+  labels:
+    app.kubernetes.io/name: tenantiq
+    app.kubernetes.io/component: beat
+    app.kubernetes.io/part-of: tenantiq
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenantiq
+      app.kubernetes.io/component: beat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenantiq
+        app.kubernetes.io/component: beat
+        app.kubernetes.io/part-of: tenantiq
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: beat
+          image: tenantiq/backend:dev
+          # The schedule file records when each entry last ran. It goes to /tmp because /app belongs
+          # to root in the image, and losing it with the pod only means the sweep runs on start.
+          command:
+            - celery
+            - -A
+            - config
+            - beat
+            - --loglevel=info
+            - --schedule=/tmp/celerybeat-schedule
+          envFrom:
+            - configMapRef:
+                name: tenantiq-config
+            - secretRef:
+                name: tenantiq-secrets
+          # No probes, for the worker's reason: no port, and a broker round trip is not a health
+          # check. A beat that crashes is restarted by the kubelet like any other container.
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              memory: 512Mi

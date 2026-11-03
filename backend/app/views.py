@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 from dataclasses import asdict
-from datetime import datetime, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 from django.conf import settings
 from django.db import transaction
@@ -23,12 +24,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from app.generation import (
+    Citation,
     CitationsEvent,
     ErrorEvent,
     TokenEvent,
     get_llm,
     stream_grounded_answer,
 )
+from app.log_context import ms_since
 from app.models import Chunk, Document, Tenant
 from app.rag import retrieve_context
 from app.serializers import ChunkSerializer, DocumentSerializer
@@ -40,7 +43,15 @@ from app.throttling import (
     TenantReadRateThrottle,
     TenantUploadRateThrottle,
 )
-from app.usage import estimate_tokens, record_query_usage, usage_summary
+from app.usage import (
+    DEFAULT_DAYS,
+    MAX_DAYS,
+    estimate_tokens,
+    record_query_usage,
+    usage_by_day,
+    usage_summary,
+    utc_today,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -383,28 +394,96 @@ class QueryView(APIView):
 
         ``model`` is the model the resolved client actually uses, not the configured Anthropic name,
         so an answer served by the local Ollama fallback is priced as that model.
+
+        It also logs the generation line (#26, ADR-0024), last, so it can say how the stream ended:
+        ``answered``, ``refused``, ``failed``, ``disconnected`` when the client hung up first, or
+        ``error`` when the stream raised.
         """
+        model = getattr(llm, "model", "") or settings.TENANTIQ_LLM_MODEL
         produced: list[str] = []
+        citations: tuple[Citation, ...] = ()
+        outcome = "incomplete"  # replaced by whatever ends the stream
+        started = time.perf_counter()
+        first_token_ms: int | None = None
         try:
             for event in stream_grounded_answer(context, llm=llm):
                 if isinstance(event, TokenEvent):
+                    if first_token_ms is None:
+                        first_token_ms = ms_since(started)
                     produced.append(event.text)
+                elif isinstance(event, CitationsEvent):
+                    outcome = "refused" if event.refused else "answered"
+                    citations = event.citations
+                elif isinstance(event, ErrorEvent):
+                    outcome = "failed"
                 yield _sse_frame(event)
+        except GeneratorExit:
+            outcome = "disconnected"
+            raise
+        except BaseException:
+            outcome = "error"
+            raise
         finally:
-            if context.has_context and produced:
+            spent = context.has_context and bool(produced)
+            input_tokens = output_tokens = 0
+            if spent:
+                input_tokens = estimate_tokens(context.system_prompt) + estimate_tokens(
+                    context.user_prompt
+                )
+                output_tokens = estimate_tokens("".join(produced))
                 try:
                     record_query_usage(
                         tenant,
-                        model=getattr(llm, "model", "") or settings.TENANTIQ_LLM_MODEL,
-                        input_tokens=estimate_tokens(context.system_prompt)
-                        + estimate_tokens(context.user_prompt),
-                        output_tokens=estimate_tokens("".join(produced)),
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
                     )
                 except Exception:  # noqa: BLE001 — accounting must never corrupt a served answer
                     # Every token has already been sent to the client. Losing a usage row is bad (it
                     # is logged at exception level for follow-up); truncating or erroring a response
                     # the client already received in full would be worse.
                     logger.exception("failed to record query usage for tenant %s", tenant.id)
+            _log_generation(
+                outcome,
+                # A refusal never reaches the model, so there is no model and no first token to time.
+                model=model if context.has_context else None,
+                duration_ms=ms_since(started),
+                first_token_ms=first_token_ms if context.has_context else None,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                citations=citations,
+            )
+
+
+def _log_generation(
+    outcome: str,
+    *,
+    model: str | None,
+    duration_ms: int,
+    first_token_ms: int | None,
+    input_tokens: int,
+    output_tokens: int,
+    citations: tuple[Citation, ...],
+) -> None:
+    """One line per answer: how it ended, which model, how long, what it cost in tokens, what it
+    cited. The answer's text is not on it, nor is the question's (ADR-0024)."""
+    logger.info(
+        "generation %s in %d ms",
+        outcome,
+        duration_ms,
+        extra={
+            "event": "generation",
+            "outcome": outcome,
+            "model": model,
+            "duration_ms": duration_ms,
+            "first_token_ms": first_token_ms,
+            # The same estimates the usage row is charged with (#17), so the line and the bill agree.
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "citations": len(citations),
+            "cited_chunk_ids": [citation.chunk_id for citation in citations],
+        },
+    )
 
 
 class UsageView(APIView):
@@ -447,3 +526,86 @@ class UsageView(APIView):
                 "currency": "USD",
             }
         )
+
+
+def _parse_day(raw: str | None, name: str) -> date | None:
+    """Parse an optional ``YYYY-MM-DD`` query parameter. Anything else raises ``ValueError``.
+
+    The round trip is what keeps it to that form: on Python 3.11+ ``date.fromisoformat`` also reads
+    ``20261022`` and ISO week dates, which only one of the two would then print back.
+    """
+    if not raw:
+        return None
+    try:
+        day = date.fromisoformat(raw)
+    except ValueError:  # malformed, or well formed but not a date, like 2026-02-30
+        day = None
+    if day is None or day.isoformat() != raw:
+        raise ValueError(f"'{name}' must be a calendar date, as YYYY-MM-DD.")
+    return day
+
+
+class UsageDailyView(APIView):
+    """The caller's usage for each UTC day of a range, for the usage dashboard (#27, ADR-0025).
+
+    ``start`` and ``end`` are inclusive calendar dates, and default to the 30 days ending today.
+    The response has an entry for every day of the range, zeros included, and the range's totals,
+    which are the sum of those days. Like ``UsageView`` it reads through the tenant-scoped manager,
+    so a tenant only ever sees its own spend.
+
+    The range is checked before anything is read. A malformed date, a start after the end, a start
+    in the future or a range longer than a year is a 400. An end in the future is moved back to
+    today rather than refused, so "this month" works on the 22nd; the days after today have had no
+    usage yet, and reporting them as zeros would say something about days that have not happened.
+    The response states the range it reports, so a client can see the move.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [TenantReadRateThrottle]  # a cheap read, like /api/usage
+
+    def get(self, request: Request) -> Response:
+        today = utc_today()
+        try:
+            start = _parse_day(request.query_params.get("start"), "start")
+            end = _parse_day(request.query_params.get("end"), "end")
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        last = end or today
+        first = start or last - timedelta(days=DEFAULT_DAYS - 1)
+        problem = None
+        if first > today:
+            problem = "'start' must not be in the future."
+        elif first > last:
+            problem = "'start' must not be after 'end'."
+        else:
+            last = min(last, today)
+            if (last - first).days + 1 > MAX_DAYS:
+                problem = f"A range covers at most {MAX_DAYS} days."
+        if problem:
+            return Response({"detail": problem}, status=status.HTTP_400_BAD_REQUEST)
+
+        usage = usage_by_day(first=first, last=last)
+        return Response(
+            {
+                "start": first.isoformat(),
+                "end": last.isoformat(),
+                "timezone": "UTC",
+                "currency": "USD",
+                "totals": _usage_numbers(usage["totals"]),
+                "days": [
+                    {"date": day["date"].isoformat(), **_usage_numbers(day)}
+                    for day in usage["days"]
+                ],
+            }
+        )
+
+
+def _usage_numbers(row: dict) -> dict[str, object]:
+    """One day's or one range's numbers as JSON, the cost as a string for the reason ``UsageView``
+    gives."""
+    return {
+        "requests": row["requests"],
+        "input_tokens": row["input_tokens"],
+        "output_tokens": row["output_tokens"],
+        "estimated_cost_usd": str(row["estimated_cost_usd"]),
+    }

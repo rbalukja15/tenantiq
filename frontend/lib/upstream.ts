@@ -20,6 +20,7 @@ export const RESPONSE_HEADER_ALLOWLIST = [
   "cache-control",
   "retry-after",
   "x-accel-buffering", // keeps #19's SSE stream unbuffered end to end
+  "x-request-id", // names the request in the API's logs (#26), so a reported failure can be found
 ] as const;
 
 /**

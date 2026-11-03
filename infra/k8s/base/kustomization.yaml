@@ -11,6 +11,7 @@ resources:
   - migrate-job.yaml
   - backend.yaml
   - worker.yaml
+  - beat.yaml
   - frontend.yaml
 
 configMapGenerator:

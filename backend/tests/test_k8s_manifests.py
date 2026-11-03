@@ -23,6 +23,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from app.checks import check_the_sweep_cannot_reap_running_work
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 K8S = REPO_ROOT / "infra" / "k8s"
 SETTINGS = REPO_ROOT / "backend" / "config" / "settings.py"
@@ -131,6 +133,41 @@ def test_prod_pins_the_unscalable_workloads_to_one_replica(workload: str) -> Non
         f"{workload} is set to {deployment['spec']['replicas']} replicas. Read the comment in "
         f"infra/k8s/overlays/prod/patch-{workload.split('-')[1]}-replicas.yaml before changing this."
     )
+
+
+@pytest.mark.parametrize("overlay", sorted(OVERLAYS))
+def test_beat_is_one_scheduler_replaced_rather_than_rolled(overlay: str) -> None:
+    """Every running beat sends every scheduled entry (#55, ADR-0023).
+
+    A second replica would send each one twice, and so would the overlap of a rolling update, which
+    is why the strategy is pinned as well as the count.
+    """
+    beat = next(
+        doc
+        for doc in _render(overlay)
+        if doc["kind"] == "Deployment" and doc["metadata"]["name"] == "tenantiq-beat"
+    )
+    assert beat["spec"]["replicas"] == 1
+    assert beat["spec"]["strategy"]["type"] == "Recreate"
+
+
+@pytest.mark.parametrize("overlay", sorted(OVERLAYS))
+def test_the_overlays_sweep_settings_pass_the_check_migrate_runs(overlay: str, settings) -> None:
+    """A threshold the system check refuses stops every release at its migrate Job (#55). Checked
+    against the rendered values, so the overlay edit fails here rather than the deploy after it."""
+    config = next(
+        doc
+        for doc in _render(overlay)
+        if doc["kind"] == "ConfigMap" and doc["metadata"]["name"].startswith("tenantiq-config-")
+    )["data"]
+    for key in (
+        "TENANTIQ_INGEST_TIME_LIMIT",
+        "TENANTIQ_INGEST_REAP_AFTER_SECONDS",
+        "TENANTIQ_INGEST_SWEEP_INTERVAL_SECONDS",
+    ):
+        setattr(settings, key, int(config[key]))
+
+    assert check_the_sweep_cannot_reap_running_work(None) == []
 
 
 @pytest.mark.parametrize("overlay", sorted(OVERLAYS))

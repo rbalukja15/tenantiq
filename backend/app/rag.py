@@ -11,10 +11,15 @@ no-DB, no-network part.)
 Tenant isolation is inherited and load-bearing: retrieval runs through the tenant-scoped manager
 (ADR-0002, Layer 1) with Postgres RLS behind it (Layer 2), so a question can only ever be grounded
 in the active tenant's chunks. Callers must run inside a ``tenant_context``.
+
+The floor's verdict is logged (#26, ADR-0024): how many candidates became sources, the best score
+among all of them, and the chunk ids kept. The best score is there for the refusals: "nothing
+cleared 0.50, best was 0.44" is the line that says whether the floor or the corpus refused.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -22,6 +27,8 @@ from django.conf import settings
 from app.guardrails import fence_source
 from app.models import Chunk
 from app.retrieval import nearest_chunks
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -135,6 +142,21 @@ def retrieve_context(
 
     chunks = nearest_chunks(question, k=k)
     sources = _select_sources(chunks, min_similarity)
+    best = max((1.0 - float(chunk.distance) for chunk in chunks), default=None)
+    logger.info(
+        "%d of %d retrieved chunks cleared the similarity floor of %.2f",
+        len(sources),
+        len(chunks),
+        min_similarity,
+        extra={
+            "event": "sources",
+            "candidates": len(chunks),
+            "sources": len(sources),
+            "min_similarity": min_similarity,
+            "best_similarity": None if best is None else round(best, 4),
+            "source_chunk_ids": [source.chunk_id for source in sources],
+        },
+    )
     system_prompt, user_prompt = build_grounded_prompt(question, sources)
     return AssembledContext(
         question=question,
