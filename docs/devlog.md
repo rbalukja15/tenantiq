@@ -1814,3 +1814,11 @@ environment has a `KUBECONFIG` secret, the deploy job publishes the images and s
 notice. A red build on every merge before anyone has rented a server would only teach people to
 ignore red. Whichever host it is also decides the ingress controller: the overlay's annotations are
 written for ingress-nginx, which upstream retired in March 2026.
+
+## 2026-11-03 — M6 #25: no host, for now
+
+A host costs money every month, and this project is not spending any yet, so #25 closes on the
+pipeline alone and the live demo moves to its own issue. Nothing in the pipeline waits on it: every
+merge to main still builds and publishes both images, and the deploy job stays a green no-op until
+the `production` environment has a `KUBECONFIG` secret. The README no longer promises a demo link;
+`make dev` is the way to see the whole system run.
