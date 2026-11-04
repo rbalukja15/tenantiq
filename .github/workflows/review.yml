@@ -1,0 +1,44 @@
+name: Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Runs the ponytail-review skill on the pull request and posts its report
+  # as one comment. It reviews once per PR; re-run the job from the Actions
+  # tab to review again after new pushes.
+  ponytail:
+    if: github.event.pull_request.draft == false && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Comments come from github-actions[bot] instead of a separate app.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          include_fix_links: false
+          plugin_marketplaces: https://github.com/DietrichGebert/ponytail.git
+          plugins: ponytail@ponytail
+          prompt: |
+            Use the ponytail-review skill to review pull request #${{ github.event.pull_request.number }}
+            in ${{ github.repository }}. The change is the diff between origin/${{ github.base_ref }} and HEAD;
+            read `gh pr view ${{ github.event.pull_request.number }}` for its description.
+
+            Post the full report as a single comment with
+            `gh pr comment ${{ github.event.pull_request.number }} --body-file <file>`.
+            The comment is the report only: no title naming a tool, no signature,
+            no footer, no links to any website.
+          claude_args: >-
+            --allowedTools "Read,Grep,Glob,Write,Skill,Bash(git diff:*),Bash(git log:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
