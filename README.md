@@ -28,17 +28,21 @@ A production-shaped RAG system built in the open — one reviewed PR per issue, 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    U[User] -->|SSO / OIDC| FE[Next.js frontend]
-    FE -->|tenant-scoped API| API[Django REST]
-    API --> AUTH[Keycloak OIDC]
-    API --> Q[(Celery + Redis)]
-    Q --> ING[Ingestion: parse - chunk - embed]
-    ING --> PG[(Postgres + pgvector)]
-    API -->|retrieve top-k| PG
-    API -->|grounded prompt| LLM[LLM - Anthropic / Ollama]
-    LLM -->|answer + citations| API
+flowchart TB
+    B([Browser]) -->|session cookie only| BFF["Next.js app + BFF<br/>keeps the token server-side"]
+    BFF <-->|OIDC code flow + PKCE| KC["Keycloak<br/>one realm per tenant"]
+    BFF -->|bearer token| API["Django REST API<br/>tenant from the verified token only"]
+    API -->|ingest task| R[(Redis)]
+    R --> W["Celery worker<br/>parse → chunk → embed"]
+    W -->|chunks + vectors| PG[("Postgres + pgvector<br/>scoped ORM + forced RLS")]
+    API -->|question| ASK["RAG engine<br/>guardrails → retrieve → ground → cite"]
+    ASK -->|top-k, own rows only| PG
+    ASK -->|grounded prompt| LLM["LLM<br/>Anthropic · Ollama locally"]
+    W & ASK -.-> EMB["Embeddings<br/>Voyage · Ollama locally"]
+    ASK -.->|streamed answer + citations| BFF
 ```
+
+Two paths cross one tenant boundary. An upload is queued, and a worker parses, chunks and embeds it. A question is embedded, matched against that tenant's chunks only, answered from them, and streamed back with citations that resolve to real chunks. The browser never holds a token: the Next.js server keeps it and calls the API on the browser's behalf.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full breakdown and [`docs/adr/`](docs/adr) for the decisions behind it.
 
