@@ -11,6 +11,7 @@
 #
 #   kubectl -n tenantiq create secret generic tenantiq-secrets \
 #     --from-literal=DATABASE_URL='postgresql://USER:PASS@HOST:5432/tenantiq' \
+#     --from-literal=REDIS_URL='rediss://USER:PASS@HOST:6379/0?ssl_cert_reqs=required' \
 #     --from-literal=DJANGO_SECRET_KEY="$(openssl rand -base64 48)" \
 #     --from-literal=VOYAGE_API_KEY='...' \
 #     --from-literal=ANTHROPIC_API_KEY='...'
@@ -19,9 +20,10 @@
 # name is real and worth stating: rotating the Secret does NOT roll the pods, so a rotation has to be
 # followed by `kubectl rollout restart`. docs/deployment.md says so where someone will read it.
 #
-# UNFINISHED, deliberately, and named rather than implied: the image this deploys as `frontend` is
-# built from frontend/Dockerfile, whose CMD is `next dev`. A production image (`next build` +
-# standalone output) belongs with #25.
+# Deployed by scripts/deploy.py, which CI runs on every green merge to main (#25, ADR-0022). It pins
+# the images to the digests that run pushed and applies this overlay in the order a release needs:
+# config, then migrations, then the workloads. `kubectl apply` of the whole render would roll the
+# new pods before the migration had run.
 #
 # Embeddings are settled (#53, ADR-0020): this overlay points the embedder at Voyage, which needs
 # VOYAGE_API_KEY in the Secret above. GENERATION is not, and the default here is deliberate — with no
@@ -52,8 +54,6 @@ configMapGenerator:
     literals:
       - DJANGO_DEBUG=false
       - DJANGO_ALLOWED_HOSTS=tenantiq-backend,tenantiq-backend.svc.cluster.local
-      # Managed Redis; the host comes from the deployment, not from a Service in this namespace.
-      - REDIS_URL=redis://tenantiq-redis.example.internal:6379/0
       # #88: 0.0 refuses nothing, so the product answers every question whether or not the corpus
       # can. The base's 0.50 was measured on mxbai-embed-large, and a floor does not carry across
       # embedders: copied to voyage-4 it could refuse questions the corpus answers. This stays at
@@ -68,8 +68,14 @@ configMapGenerator:
     literals:
       - APP_BASE_URL=https://tenantiq.example.com
 
+# Where CI pushes the images on every green merge to main (#25). The names must equal the ones
+# .github/workflows/ci.yml pushes to, and tests/test_deploy.py fails if they drift apart. The tag is
+# one CI never pushes: scripts/deploy.py pins each image to the digest the pipeline built, so a hand
+# `kubectl apply` of this render fails to pull, under a tag that says why.
 images:
   - name: tenantiq/backend
-    newTag: latest # the pipeline (#25) replaces this with the released digest
+    newName: ghcr.io/rbalukja15/tenantiq-backend
+    newTag: pinned-at-deploy
   - name: tenantiq/frontend
-    newTag: latest
+    newName: ghcr.io/rbalukja15/tenantiq-frontend
+    newTag: pinned-at-deploy

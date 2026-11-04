@@ -6,9 +6,9 @@
 # A Job has its own sharp edge and it is worth naming: `kubectl apply` has no ordering primitive and
 # a completed Job's `spec` is immutable, so re-applying this at the next release fails rather than
 # re-running. The deploy flow therefore deletes it first and waits for completion before rolling the
-# Deployments — that sequencing lives in docs/deployment.md and becomes the pipeline's job in #25.
-# Kustomize alone cannot express "run this, then that"; pretending otherwise is how a deploy ships an
-# unmigrated schema.
+# Deployments. scripts/deploy.py does exactly that, for the pipeline and an operator alike (#25,
+# ADR-0022). Kustomize alone cannot express "run this, then that"; pretending otherwise is how a
+# deploy ships an unmigrated schema.
 apiVersion: batch/v1
 kind: Job
 metadata:

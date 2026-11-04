@@ -1,10 +1,8 @@
 # The Next.js BFF (#24, ADR-0019). This is the ONLY component an Ingress routes to: the browser holds
 # no token and never calls Django directly (ADR-0013 §1).
 #
-# WARNING, stated rather than buried: `frontend/Dockerfile` builds a **dev-server** image — its CMD is
-# `next dev`. These manifests deploy whatever image they are given, so the prod overlay is only
-# production-grade once a production image exists (`next build` + `next start`, standalone output).
-# That image belongs with the deploy pipeline in #25 and is not invented here.
+# The image is frontend/Dockerfile's `production` target (#25, ADR-0022): Next's standalone server,
+# run as uid 1000, with no settings baked in. Everything it needs arrives in the env below.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

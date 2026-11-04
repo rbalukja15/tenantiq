@@ -31,7 +31,10 @@ spec:
       containers:
         - name: backend
           image: tenantiq/backend:dev # overlays set the real tag via the `images` transformer
-          command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+          # gunicorn, not `manage.py runserver`, which Django says must never serve production (#25,
+          # ADR-0022). Workers, threads and timeouts are in backend/gunicorn.conf.py, which the image
+          # carries and gunicorn reads from /app; tests/test_gunicorn.py runs that file for real.
+          command: ["gunicorn", "config.wsgi"]
           ports:
             - name: http
               containerPort: 8000

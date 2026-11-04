@@ -5,6 +5,18 @@ on:
   push:
     branches: [main]
 
+# Read-only unless a job asks for more. Only `publish` does, to push images (ADR-0022), so a job
+# that names no permissions of its own never inherits a wider repository default.
+permissions:
+  contents: read
+
+env:
+  # Where every green merge to main lands (#25, ADR-0022). The prod overlay pulls exactly these
+  # names; backend/tests/test_deploy.py fails if the two drift apart, because a digest pin for one
+  # name does nothing to an image the cluster knows by another.
+  BACKEND_IMAGE: ghcr.io/rbalukja15/tenantiq-backend
+  FRONTEND_IMAGE: ghcr.io/rbalukja15/tenantiq-frontend
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -37,8 +49,8 @@ jobs:
       # unchecked while the job passes. kubectl is preinstalled on the GitHub-hosted runners.
       TENANTIQ_REQUIRE_KUBECTL: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -79,8 +91,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           # Node 20 went end-of-life in April 2026, and the refreshed frontend toolchain (#52)
           # requires >= 22 anyway (vitest 4 / rolldown, jsdom 30). Pinned to the LTS line.
@@ -102,3 +114,132 @@ jobs:
         # The only check that exercises the real Next/React compile path — server/client boundary
         # violations and bad `Link` hrefs pass lint and `tsc --noEmit` but fail here (#52).
         run: npm run build
+
+  images:
+    # Both production images, built on every pull request so that a broken Dockerfile fails the PR
+    # that broke it rather than the deploy after it (#25, ADR-0022). Nothing leaves this job: its
+    # token cannot write packages, so no pull request can publish an image.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Backend image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: backend
+          push: false
+          tags: ${{ env.BACKEND_IMAGE }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Frontend image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: frontend
+          target: production
+          push: false
+          tags: ${{ env.FRONTEND_IMAGE }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  publish:
+    # The same two builds on a push to main, pushed to GHCR. This is the only job whose token can
+    # write packages. Its build steps match `images` in everything but `push`, and
+    # backend/tests/test_deploy.py fails if they drift: the point of building on a pull request is
+    # that it builds what main will ship.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      backend: ${{ steps.backend.outputs.digest }}
+      frontend: ${{ steps.frontend.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Log in to the GitHub container registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Backend image
+        id: backend
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: backend
+          push: true
+          # One tag per commit, never `latest`: the deploy pins the digest this step prints, and a
+          # tag that moves would let the cluster run something CI did not just test.
+          tags: ${{ env.BACKEND_IMAGE }}:sha-${{ github.sha }}
+          # Links the package to this repository, whose visibility it then inherits.
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Frontend image
+        id: frontend
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: frontend
+          target: production
+          push: true
+          tags: ${{ env.FRONTEND_IMAGE }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    # Every green merge to main, and nothing else. `needs` is what makes "green" true: if the tests
+    # or either image fail, this job is skipped and the cluster keeps running the last good release.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, publish]
+    runs-on: ubuntu-latest
+    # Secrets for the cluster live on this environment, not on the repository, so that a protection
+    # rule (a required reviewer, a wait timer) can be added in Settings > Environments without
+    # editing this file.
+    environment: production
+    # A deploy that is running finishes before the next one starts: two at once would race on the
+    # migrate Job. A newer queued deploy replaces an older queued one, so main's head always wins.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Is there a cluster to deploy to?
+        id: cluster
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        # Until the production environment has a KUBECONFIG secret, a merge publishes the images and
+        # stops here, green, with a notice saying so. Failing would turn every merge red before
+        # anyone has rented a server.
+        run: |
+          if [ -z "$KUBECONFIG_CONTENT" ]; then
+            echo "::notice title=Not deployed::The images for this commit were pushed, but the production environment has no KUBECONFIG secret, so nothing was deployed. docs/deployment.md, 'Continuous deployment', lists what to set up."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.cluster.outputs.configured == 'true'
+      - name: Deploy
+        if: steps.cluster.outputs.configured == 'true'
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+          BACKEND_DIGEST: ${{ needs.publish.outputs.backend }}
+          FRONTEND_DIGEST: ${{ needs.publish.outputs.frontend }}
+        # kubectl is preinstalled on the runner. The script owns the order (secrets checked, then
+        # config, then migrations, then the workloads) so that CI and an operator run the same one.
+        # The kubeconfig needs no cleanup step: the runner empties RUNNER_TEMP at the end of every
+        # job, whether it passed or failed.
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          ( umask 077 && printf '%s\n' "$KUBECONFIG_CONTENT" > "$KUBECONFIG" )
+          python3 scripts/deploy.py \
+            --backend "$BACKEND_IMAGE@$BACKEND_DIGEST" \
+            --frontend "$FRONTEND_IMAGE@$FRONTEND_DIGEST"
