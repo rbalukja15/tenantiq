@@ -109,7 +109,8 @@ and long answers work under a production server, and that is tested rather than 
 
 **Left open, deliberately.** The host itself, and its specifics (ingress controller, storage class),
 are the operator's choice. None is rented yet (2026-11-03): the project runs at no cost, so there is
-no public demo, and hosting one is tracked as its own issue; the prod overlay's Ingress still assumes ingress-nginx, which upstream
-retired in March 2026. The probes are still TCP, because there is no `/healthz`. And nothing here
-has run against a real cluster: the order is tested against a recording kubectl and the render
-against a real one, so the first deploy is the first end-to-end check.
+no public demo, and hosting one is tracked as its own issue. The prod overlay's Ingress still
+assumes ingress-nginx, which upstream retired in March 2026. The probes are still TCP, because
+there is no `/healthz`. And nothing here has run against a real cluster: the order is tested
+against a recording kubectl and the render against a real one, so the first deploy is the first
+end-to-end check.
