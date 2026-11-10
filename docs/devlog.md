@@ -1769,3 +1769,75 @@ The isolation test was also checked against the thing it protects. The per-day s
 unscoped manager, still sums only the active tenant's rows on Postgres. Run on SQLite, which has no
 row-level security, the same test fails with both tenants' tokens added together, so it is testing
 the database and not the fixture.
+
+## 2026-10-22 — M6 #25: two dev servers, and a release order that ran backwards
+
+I expected #25 to be a workflow file. Reading the manifests with a pipeline in mind, the cluster
+would have run two development servers: the frontend's `next dev`, which ADR-0019 had flagged, and
+the API's `manage.py runserver`, which nobody had. `backend.yaml` had copied its command from
+compose.
+
+**The obvious gunicorn config is wrong for this API.** The default sync worker gives a whole process
+to one request, and an answer streams for as long as the model generates, so two workers would
+serve two questions while every document list queued behind them. Its 30-second timeout would also
+kill any answer that took longer. The threaded worker fixes both, and I wanted that tested rather
+than written in a comment: `test_gunicorn.py` runs a real gunicorn on the shipped config with a
+stand-in app. With the worker switched back to sync, a ping made during a stream waited 5.01 s, and
+a four-second stream under a two-second timeout was cut off after 110 bytes. One more default had
+to move: gunicorn closes idle connections after 2 s, and the BFF's fetch keeps them for 4, so the
+BFF could send a request down a socket gunicorn had just closed.
+
+**The frontend image is Next's standalone output**: 66 MB of traced dependencies instead of a
+695 MB `node_modules`, and no environment baked in, because nothing is `NEXT_PUBLIC_`. The trap was
+`HOSTNAME`. `server.js` binds to it, and platforms set it to the container's own name, which makes
+the server refuse `kubectl port-forward` on localhost. containerd applies the image's environment
+after its own, so `ENV HOSTNAME=0.0.0.0` would have been enough there, but ECS overrides an image's
+value (vercel/next.js#58657), so the command sets it instead.
+
+**The documented release order guarded nothing.** docs/deployment.md applied the whole overlay,
+then waited for the migrate Job. The first apply had already rolled the Deployments, so the new API
+and worker started against the old schema while the wait looked after them. `scripts/deploy.py`
+now owns the order for CI and operators alike: check the Secret, apply everything that is not a
+workload, run the migration to completion (stopping with its logs if it fails), then roll. Its
+tests drive it against a recording kubectl, and the old order fails three of them. Images are
+pinned by digest. The prod overlay names a tag CI never pushes, so a hand `kubectl apply` fails to
+pull rather than running something nobody tested.
+
+Two smaller things came from trying rather than reading. A managed Redis over TLS needs
+`?ssl_cert_reqs=required` in its URL, or Celery refuses to start; that URL also carries a password,
+so `REDIS_URL` moved from the ConfigMap into the Secret, and the deploy checks for it. And renaming
+the prod images to their registry names made `test_our_own_images_run_as_non_root` match nothing in
+prod, so it passed by checking nothing. It now fails if it finds none of our images.
+
+What is left is the part I cannot do from here: a cluster, and the live link. Until the `production`
+environment has a `KUBECONFIG` secret, the deploy job publishes the images and stops green with a
+notice. A red build on every merge before anyone has rented a server would only teach people to
+ignore red. Whichever host it is also decides the ingress controller: the overlay's annotations are
+written for ingress-nginx, which upstream retired in March 2026.
+
+## 2026-11-03 — M6 #25: no host, for now
+
+A host costs money every month, and this project is not spending any yet, so #25 closes on the
+pipeline alone and the live demo moves to its own issue. Nothing in the pipeline waits on it: every
+merge to main still builds and publishes both images, and the deploy job stays a green no-op until
+the `production` environment has a `KUBECONFIG` secret. The README no longer promises a demo link;
+`make dev` is the way to see the whole system run.
+
+## 2026-11-03 — M6 #25: what a pull request's token can do
+
+Review asked for two things in the workflow: `packages: write` only where something is pushed, and
+actions pinned by commit rather than tag. The first takes two jobs, because a job's permissions
+cannot depend on the event: `images` builds both images on a pull request with a read-only token,
+and `publish` runs the same builds on main and pushes them. Two copies of a build can drift, and the
+reason to build on a pull request is that it builds what main will ship, so a test fails if the two
+differ in anything but `push`. The workflow's default is now read-only as well, so a job that names
+no permissions never inherits a wider repository setting.
+
+The pins are the commits the runner itself resolved the tags to, read from the "Download action
+repository" lines in this pull request's own job logs, so they are exactly the code CI had been
+running. Dependabot proposes new ones weekly, as one grouped pull request, and its first will have
+something in it: the same logs warn that checkout, setup-python and setup-node still target Node 20,
+which GitHub now forces onto Node 24.
+
+The third point, a kubeconfig left on the runner, needed only a comment: the runner empties
+`RUNNER_TEMP` at the end of every job.

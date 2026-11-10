@@ -33,6 +33,10 @@ next-env.d.ts
 # Local compose overrides — the conventional per-machine escape hatch; never part of a change.
 docker-compose.override.yml
 
+# The throwaway overlay scripts/deploy.py renders a release through. It deletes it on exit, so one
+# left here means a deploy was killed mid-render (#25).
+infra/k8s/overlays/.release-*/
+
 # Claude Code (local settings / permissions, and machine-specific dev-server paths)
 .claude/settings.local.json
 .claude/launch.json
