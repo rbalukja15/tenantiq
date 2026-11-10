@@ -17,19 +17,35 @@ jobs:
   # as one comment. It reviews once per PR; re-run the job from the Actions
   # tab to review again after new pushes.
   ponytail:
-    if: github.event.pull_request.draft == false && github.actor != 'dependabot[bot]'
+    # Pull requests from forks get no secrets, so they are skipped instead of failing.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # A stuck review would otherwise run, and use the subscription, for up to six hours.
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      # This job holds the subscription token, so nothing it runs sits on a moving tag.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-      - uses: anthropics/claude-code-action@v1
+      # The plugin runs its own hooks next to the token, so it is fetched at a fixed
+      # release. The action can't pin a marketplace URL, only take a local path. Bump the
+      # commit on purpose, after reading what changed.
+      - name: Fetch ponytail v5.3.3
+        run: |
+          git init -q "$RUNNER_TEMP/ponytail"
+          git -C "$RUNNER_TEMP/ponytail" fetch -q --depth 1 \
+            https://github.com/DietrichGebert/ponytail.git 7801d061243d7b753bad0e0b3c057cd250b11755
+          git -C "$RUNNER_TEMP/ponytail" checkout -q FETCH_HEAD
+      - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Comments come from github-actions[bot] instead of a separate app.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           include_fix_links: false
-          plugin_marketplaces: https://github.com/DietrichGebert/ponytail.git
+          plugin_marketplaces: ${{ runner.temp }}/ponytail
           plugins: ponytail@ponytail
           prompt: |
             Use the ponytail-review skill to review pull request #${{ github.event.pull_request.number }}
